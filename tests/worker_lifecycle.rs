@@ -248,22 +248,24 @@ fn compiled_binary_handles_version_help_json_errors_and_exit_codes() {
             .contains("ERR:")
     );
 
-    // All-provider status with an empty PATH (reports error per missing provider cleanly)
-    let all_status = Command::new(bin)
-        .env("PATH", "/nonexistent-dir-for-test")
-        .args([
-            "--runtime-dir",
-            tmp.path().join("rt").to_str().unwrap(),
-            "provider",
-            "status",
-            "--json",
-        ])
-        .output()
-        .unwrap();
-    assert!(all_status.status.success());
-    let all_val: serde_json::Value = serde_json::from_slice(&all_status.stdout).unwrap();
-    assert_eq!(all_val["providers"].as_array().unwrap().len(), 3);
-    assert_eq!(all_val["providers"][0]["status"], "error");
+    // All-provider status & usage with an empty PATH (reports error per missing provider cleanly)
+    for sub in ["status", "usage"] {
+        let all = Command::new(bin)
+            .env("PATH", "/nonexistent-dir-for-test")
+            .args([
+                "--runtime-dir",
+                tmp.path().join("rt").to_str().unwrap(),
+                "provider",
+                sub,
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(all.status.success());
+        let all_val: serde_json::Value = serde_json::from_slice(&all.stdout).unwrap();
+        assert_eq!(all_val["providers"].as_array().unwrap().len(), 3);
+        assert_eq!(all_val["providers"][0]["status"], "error");
+    }
 }
 
 #[tokio::test]

@@ -1,5 +1,5 @@
 use clap::{Arg, ArgAction, Command};
-use cli_command_kit::{HelpOptions, Mode, SkillSource, TreeOptions};
+use cli_command_kit::{HelpOptions, Mode, SkillSource};
 use std::path::PathBuf;
 
 pub fn help_options() -> HelpOptions {
@@ -8,10 +8,6 @@ pub fn help_options() -> HelpOptions {
             SkillSource::new("alexgorbatchev/agent-auth-cli", "main")
                 .expect("the fixed skill source names a GitHub repository"),
         ),
-        tree: TreeOptions {
-            hide_generated_commands: true,
-            ..Default::default()
-        },
         ..Default::default()
     }
 }
@@ -20,14 +16,14 @@ pub fn command(mode: Mode) -> Command {
     let provider_bin_arg = || {
         Arg::new("provider-bin")
             .long("provider-bin")
-            .value_name("PATH")
+            .value_name("path")
             .value_parser(clap::value_parser!(PathBuf))
             .help("Override the provider CLI executable path")
     };
     let home_arg = || {
         Arg::new("home")
             .long("home")
-            .value_name("DIR")
+            .value_name("dir")
             .value_parser(clap::value_parser!(PathBuf))
             .help("Override the provider home directory")
     };
@@ -53,7 +49,7 @@ pub fn command(mode: Mode) -> Command {
         .arg(
             Arg::new("runtime-dir")
                 .long("runtime-dir")
-                .value_name("PATH")
+                .value_name("dir")
                 .env("AGENT_AUTH_RUNTIME_DIR")
                 .global(true)
                 .value_parser(clap::value_parser!(PathBuf))
@@ -72,18 +68,37 @@ pub fn command(mode: Mode) -> Command {
                         .about("Check authentication status for one or all providers")
                         .arg(
                             Arg::new("provider")
-                                .value_name("PROVIDER")
-                                .help("Provider ID to inspect; omitted checks all providers"),
+                                .value_name("name")
+                                .help("Provider ID to inspect (codex, claude, or agy/antigravity); omitted checks all"),
                         )
                         .arg(provider_bin_arg())
                         .arg(home_arg())
                         .arg(
                             Arg::new("timeout")
                                 .long("timeout")
-                                .value_name("SECS")
+                                .value_name("sec")
                                 .default_value("15")
                                 .value_parser(clap::value_parser!(u64))
                                 .help("Status check timeout in seconds"),
+                        ),
+                )
+                .subcommand(
+                    Command::new("usage")
+                        .about("Show usage and rate-limit quotas for one or all providers")
+                        .arg(
+                            Arg::new("provider")
+                                .value_name("name")
+                                .help("Provider ID to inspect (codex, claude, or agy/antigravity); omitted checks all"),
+                        )
+                        .arg(provider_bin_arg())
+                        .arg(home_arg())
+                        .arg(
+                            Arg::new("timeout")
+                                .long("timeout")
+                                .value_name("sec")
+                                .default_value("15")
+                                .value_parser(clap::value_parser!(u64))
+                                .help("Usage fetch timeout in seconds"),
                         ),
                 )
                 .subcommand(
@@ -91,7 +106,7 @@ pub fn command(mode: Mode) -> Command {
                         .about("Sign out of a provider using its native logout")
                         .arg(
                             Arg::new("provider")
-                                .value_name("PROVIDER")
+                                .value_name("name")
                                 .required(true)
                                 .help("Provider ID to sign out"),
                         )
@@ -100,7 +115,7 @@ pub fn command(mode: Mode) -> Command {
                         .arg(
                             Arg::new("timeout")
                                 .long("timeout")
-                                .value_name("SECS")
+                                .value_name("sec")
                                 .default_value("15")
                                 .value_parser(clap::value_parser!(u64))
                                 .help("Logout timeout in seconds"),
@@ -116,14 +131,14 @@ pub fn command(mode: Mode) -> Command {
                         .about("Start a non-blocking sign-in session and return the auth URL")
                         .arg(
                             Arg::new("provider")
-                                .value_name("PROVIDER")
+                                .value_name("provider")
                                 .required(true)
-                                .help("Provider ID to sign in (codex, claude, or agy)"),
+                                .help("Provider ID to sign in (codex, claude, or agy/antigravity)"),
                         )
                         .arg(
                             Arg::new("method")
                                 .long("method")
-                                .value_name("METHOD")
+                                .value_name("name")
                                 .default_value("auto")
                                 .value_parser(["auto", "device", "oauth"])
                                 .help("Authentication method; auto prefers device when supported"),
@@ -131,7 +146,7 @@ pub fn command(mode: Mode) -> Command {
                         .arg(
                             Arg::new("ttl")
                                 .long("ttl")
-                                .value_name("SECS")
+                                .value_name("sec")
                                 .default_value("900")
                                 .value_parser(clap::value_parser!(u64))
                                 .help("Maximum session lifetime in seconds"),
@@ -139,7 +154,7 @@ pub fn command(mode: Mode) -> Command {
                         .arg(
                             Arg::new("start-timeout")
                                 .long("start-timeout")
-                                .value_name("SECS")
+                                .value_name("sec")
                                 .default_value("20")
                                 .value_parser(clap::value_parser!(u64))
                                 .help("Startup timeout in seconds while waiting for the auth URL"),
@@ -161,7 +176,7 @@ pub fn command(mode: Mode) -> Command {
                         .arg(
                             Arg::new("email")
                                 .long("email")
-                                .value_name("EMAIL")
+                                .value_name("addr")
                                 .help("Prefill email address on the login page (claude only)"),
                         ),
                 )
@@ -170,14 +185,14 @@ pub fn command(mode: Mode) -> Command {
                         .about("Submit user code or callback URL and wait for authentication")
                         .arg(
                             Arg::new("session-id")
-                                .value_name("SESSION_ID")
+                                .value_name("id")
                                 .required(true)
                                 .help("Active session identifier"),
                         )
                         .arg(
                             Arg::new("input")
                                 .long("input")
-                                .value_name("VALUE")
+                                .value_name("text")
                                 .conflicts_with("input-stdin")
                                 .help("Authorization code or callback URL from the user"),
                         )
@@ -191,7 +206,7 @@ pub fn command(mode: Mode) -> Command {
                         .arg(
                             Arg::new("timeout")
                                 .long("timeout")
-                                .value_name("SECS")
+                                .value_name("sec")
                                 .default_value("120")
                                 .value_parser(clap::value_parser!(u64))
                                 .help("Completion wait timeout in seconds"),
@@ -202,14 +217,14 @@ pub fn command(mode: Mode) -> Command {
                         .about("Wait for an active session to complete without pasting input")
                         .arg(
                             Arg::new("session-id")
-                                .value_name("SESSION_ID")
+                                .value_name("id")
                                 .required(true)
                                 .help("Active session identifier"),
                         )
                         .arg(
                             Arg::new("timeout")
                                 .long("timeout")
-                                .value_name("SECS")
+                                .value_name("sec")
                                 .default_value("300")
                                 .value_parser(clap::value_parser!(u64))
                                 .help("Wait timeout in seconds"),
@@ -220,7 +235,7 @@ pub fn command(mode: Mode) -> Command {
                         .about("Inspect the current state of an active session")
                         .arg(
                             Arg::new("session-id")
-                                .value_name("SESSION_ID")
+                                .value_name("id")
                                 .required(true)
                                 .help("Active session identifier"),
                         ),
@@ -231,7 +246,7 @@ pub fn command(mode: Mode) -> Command {
                         .about("Cancel an active authentication session")
                         .arg(
                             Arg::new("session-id")
-                                .value_name("SESSION_ID")
+                                .value_name("id")
                                 .required(true)
                                 .help("Active session identifier"),
                         ),
@@ -246,7 +261,7 @@ pub fn command(mode: Mode) -> Command {
                         .about("Print a completion script for the selected shell")
                         .arg(
                             Arg::new("shell")
-                                .value_name("SHELL")
+                                .value_name("shell")
                                 .required(true)
                                 .value_parser(["bash", "zsh", "fish", "powershell"])
                                 .help("Target shell name"),

@@ -7,7 +7,7 @@ use crate::{
     process,
     protocol::{
         AccountInfo, AuthChallenge, AuthMethod, AuthMethodChoice, ProviderDescriptor,
-        ProviderStatusReport,
+        ProviderStatusReport, ProviderUsageReport,
     },
     sandbox::Sandbox,
 };
@@ -68,6 +68,9 @@ pub trait ActiveLogin: Send {
 #[async_trait]
 pub trait ProviderAdapter: Send + Sync {
     fn id(&self) -> &'static str;
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
     fn binary_name(&self) -> &'static str;
     fn default_method(&self) -> AuthMethod;
     fn supported_methods(&self) -> &'static [AuthMethod];
@@ -94,6 +97,8 @@ pub trait ProviderAdapter: Send + Sync {
         ctx: &ProviderContext,
         timeout: Duration,
     ) -> Result<ProviderStatusReport>;
+
+    async fn usage(&self, ctx: &ProviderContext, timeout: Duration) -> Result<ProviderUsageReport>;
 
     async fn logout(&self, ctx: &ProviderContext, timeout: Duration) -> Result<()>;
 
@@ -130,7 +135,7 @@ impl ProviderRegistry {
         let needle = id.trim().to_ascii_lowercase();
         self.providers
             .iter()
-            .find(|p| p.id() == needle)
+            .find(|p| p.id() == needle || p.aliases().contains(&needle.as_str()))
             .cloned()
             .ok_or_else(|| AuthError::UnsupportedProvider(id.to_owned()))
     }
@@ -150,6 +155,7 @@ impl ProviderRegistry {
                 let available = process::resolve_binary(explicit, p.binary_name()).is_some();
                 ProviderDescriptor {
                     id: p.id().to_owned(),
+                    aliases: p.aliases().iter().map(|a| (*a).to_owned()).collect(),
                     binary: p.binary_name().to_owned(),
                     available,
                     default_method: p.default_method(),
@@ -348,6 +354,11 @@ mod tests {
                 .code(),
             "unsupported_method"
         );
+        assert_eq!(reg.get("antigravity").unwrap().id(), "agy");
+        assert_eq!(reg.get(" ANTIGRAVITY ").unwrap().id(), "agy");
+        let descs = reg.descriptors(&BTreeMap::new());
+        assert!(descs[0].aliases.is_empty());
+        assert_eq!(descs[2].aliases, vec!["antigravity".to_owned()]);
         assert_eq!(
             reg.get("unknown").err().unwrap().code(),
             "unsupported_provider"

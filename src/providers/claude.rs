@@ -2,8 +2,9 @@ use crate::{
     error::{AuthError, Result},
     process,
     protocol::{
-        AccountInfo, AuthChallenge, AuthMethod, ExpectedInput, ExpectedInputKind,
-        ProviderAuthState, ProviderStatusReport, SCHEMA_VERSION,
+        AccountInfo, AuthChallenge, AuthMethod, ExpectedInput, ExpectedInputKind, ExtraUsageInfo,
+        ProviderAuthState, ProviderStatusReport, ProviderUsageReport, ProviderUsageState,
+        SCHEMA_VERSION, UsageBucket,
     },
     providers::{
         ActiveLogin, LoginCommand, ProviderAdapter, ProviderContext, extract_https_url,
@@ -188,6 +189,127 @@ impl ProviderAdapter for ClaudeProvider {
         })
     }
 
+    async fn usage(&self, ctx: &ProviderContext, timeout: Duration) -> Result<ProviderUsageReport> {
+        let status = self.status(ctx, timeout).await?;
+        if status.status != ProviderAuthState::Authenticated {
+            return Ok(ProviderUsageReport {
+                schema_version: SCHEMA_VERSION,
+                provider: self.id().to_owned(),
+                status: ProviderUsageState::Unauthenticated,
+                plan: None,
+                buckets: Vec::new(),
+                extra_usage: None,
+                error: None,
+            });
+        }
+        let fallback_plan = status.account.and_then(|a| a.plan);
+
+        let mut cmd = Command::new(&ctx.binary);
+        cmd.args([
+            "-p",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--no-session-persistence",
+            "--setting-sources",
+            "",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+        ctx.apply_env(&mut cmd);
+        process::configure_process_group(&mut cmd);
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                return Err(AuthError::ProviderFailed {
+                    provider: "claude".into(),
+                    message: format!("failed to launch claude usage probe: {e}"),
+                });
+            }
+        };
+        let pid = child.id();
+        let mut stdin = take_pipe(child.stdin.take(), "claude usage stdin")?;
+        let stdout = take_pipe(child.stdout.take(), "claude usage stdout")?;
+        let mut stderr = take_pipe(child.stderr.take(), "claude usage stderr")?;
+
+        let init_req = serde_json::json!({
+            "type": "control_request",
+            "request_id": "init-1",
+            "request": { "subtype": "initialize" }
+        });
+        let usage_req = serde_json::json!({
+            "type": "control_request",
+            "request_id": "usage-1",
+            "request": { "subtype": "get_usage", "skip_behaviors": true }
+        });
+        let payload = format!("{init_req}\n{usage_req}\n");
+        if let Err(err) = stdin.write_all(payload.as_bytes()).await {
+            if let Some(pid) = pid {
+                process::terminate_process_group(pid, Duration::from_millis(300)).await;
+            }
+            let _ = child.wait().await;
+            return Err(AuthError::Io(err));
+        }
+        let _ = stdin.flush().await;
+
+        let read_fut = async {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Some(line) = lines.next_line().await? {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let Ok(msg) = serde_json::from_str::<Value>(trimmed) else {
+                    continue;
+                };
+                if msg.get("type").and_then(Value::as_str) == Some("control_response")
+                    && let Some(resp) = msg.get("response")
+                    && resp.get("request_id").and_then(Value::as_str) == Some("usage-1")
+                {
+                    if resp.get("subtype").and_then(Value::as_str) == Some("error") {
+                        let detail = resp
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("claude get_usage failed")
+                            .to_owned();
+                        return Err(AuthError::ProviderFailed {
+                            provider: "claude".into(),
+                            message: detail,
+                        });
+                    }
+                    let body = resp.get("response").cloned().unwrap_or(Value::Null);
+                    return Ok(parse_claude_usage(&body, fallback_plan));
+                }
+            }
+            let mut err_buf = String::new();
+            let _ = tokio::io::AsyncReadExt::read_to_string(&mut stderr, &mut err_buf).await;
+            Err(AuthError::ProviderFailed {
+                provider: "claude".into(),
+                message: if err_buf.trim().is_empty() {
+                    "claude usage probe exited before answering get_usage".into()
+                } else {
+                    sanitize_diagnostics(&err_buf)
+                },
+            })
+        };
+
+        let result = tokio::time::timeout(timeout, read_fut).await;
+        drop(stdin);
+        if let Some(pid) = pid {
+            process::terminate_process_group(pid, Duration::from_millis(300)).await;
+        }
+        let _ = child.wait().await;
+
+        match result {
+            Ok(inner) => inner,
+            Err(_) => Err(AuthError::Timeout("claude usage probe timed out".into())),
+        }
+    }
+
     async fn logout(&self, ctx: &ProviderContext, timeout: Duration) -> Result<()> {
         let mut cmd = Command::new(&ctx.binary);
         cmd.args(["auth", "logout"])
@@ -338,6 +460,159 @@ impl ProviderAdapter for ClaudeProvider {
     }
 }
 
+pub(crate) fn parse_claude_usage(
+    body: &Value,
+    fallback_plan: Option<String>,
+) -> ProviderUsageReport {
+    let plan = body
+        .get("subscription_type")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or(fallback_plan);
+    let available = body
+        .get("rate_limits_available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let Some(limits) = body.get("rate_limits").filter(|v| v.is_object()) else {
+        return ProviderUsageReport {
+            schema_version: SCHEMA_VERSION,
+            provider: "claude".into(),
+            status: ProviderUsageState::Unavailable,
+            plan,
+            buckets: Vec::new(),
+            extra_usage: None,
+            error: None,
+        };
+    };
+    if !available && limits.as_object().is_none_or(|m| m.is_empty()) {
+        return ProviderUsageReport {
+            schema_version: SCHEMA_VERSION,
+            provider: "claude".into(),
+            status: ProviderUsageState::Unavailable,
+            plan,
+            buckets: Vec::new(),
+            extra_usage: None,
+            error: None,
+        };
+    }
+
+    let mut buckets = Vec::new();
+    for (field, id, label, window) in [
+        ("five_hour", "claude-5h", "Five Hour Limit", "5h"),
+        ("seven_day", "claude-weekly", "Weekly Limit", "weekly"),
+        (
+            "seven_day_opus",
+            "claude-opus-weekly",
+            "Opus Weekly Limit",
+            "weekly",
+        ),
+        (
+            "seven_day_sonnet",
+            "claude-sonnet-weekly",
+            "Sonnet Weekly Limit",
+            "weekly",
+        ),
+        (
+            "seven_day_oauth_apps",
+            "claude-oauth-apps-weekly",
+            "OAuth Apps Weekly Limit",
+            "weekly",
+        ),
+    ] {
+        if let Some(win) = limits.get(field).filter(|v| v.is_object()) {
+            let used_fraction = win
+                .get("utilization")
+                .and_then(Value::as_f64)
+                .map(|p| (p / 100.0).clamp(0.0, 1.0));
+            let remaining_fraction = used_fraction.map(|u| (1.0 - u).clamp(0.0, 1.0));
+            let reset_time = win
+                .get("resets_at")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            buckets.push(UsageBucket {
+                id: id.into(),
+                group: Some("claude".into()),
+                label: Some(label.into()),
+                window: Some(window.into()),
+                used_fraction,
+                remaining_fraction,
+                reset_time,
+            });
+        }
+    }
+
+    if let Some(scoped) = limits.get("model_scoped").and_then(Value::as_array) {
+        for item in scoped {
+            let Some(name) = item.get("display_name").and_then(Value::as_str) else {
+                continue;
+            };
+            let slug: String = name
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+            let used_fraction = item
+                .get("utilization")
+                .and_then(Value::as_f64)
+                .map(|p| (p / 100.0).clamp(0.0, 1.0));
+            let remaining_fraction = used_fraction.map(|u| (1.0 - u).clamp(0.0, 1.0));
+            let reset_time = item
+                .get("resets_at")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            buckets.push(UsageBucket {
+                id: format!("claude-{slug}-weekly"),
+                group: Some("claude".into()),
+                label: Some(format!("{name} Weekly Limit")),
+                window: Some("weekly".into()),
+                used_fraction,
+                remaining_fraction,
+                reset_time,
+            });
+        }
+    }
+
+    let extra_usage = limits
+        .get("extra_usage")
+        .filter(|v| v.is_object())
+        .map(|ex| {
+            let used_fraction = ex
+                .get("utilization")
+                .and_then(Value::as_f64)
+                .map(|p| (p / 100.0).clamp(0.0, 1.0));
+            ExtraUsageInfo {
+                enabled: ex
+                    .get("is_enabled")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                unlimited: false,
+                used_credits: ex.get("used_credits").and_then(Value::as_f64),
+                monthly_limit: ex.get("monthly_limit").and_then(Value::as_f64),
+                balance: None,
+                currency: ex
+                    .get("currency")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                used_fraction,
+            }
+        });
+
+    ProviderUsageReport {
+        schema_version: SCHEMA_VERSION,
+        provider: "claude".into(),
+        status: ProviderUsageState::Available,
+        plan,
+        buckets,
+        extra_usage,
+        error: None,
+    }
+}
+
 pub(crate) fn parse_claude_status(raw: &str) -> Option<ProviderStatusReport> {
     let json_slice = extract_json_object(raw)?;
     let value: Value = serde_json::from_str(json_slice).ok()?;
@@ -404,5 +679,41 @@ mod tests {
         assert_eq!(report2.account.unwrap().plan.as_deref(), Some("usage"));
 
         assert!(parse_claude_status("garbage").is_none());
+
+        let usage_raw = serde_json::json!({
+            "subscription_type": "max",
+            "rate_limits_available": true,
+            "rate_limits": {
+                "five_hour": { "utilization": 40.0, "resets_at": "2026-11-21T20:00:00Z" },
+                "seven_day": { "utilization": 15.0, "resets_at": "2026-11-28T00:00:00Z" },
+                "seven_day_opus": { "utilization": 10.0, "resets_at": "2026-11-28T00:00:00Z" },
+                "seven_day_sonnet": { "utilization": 5.0, "resets_at": "2026-11-28T00:00:00Z" },
+                "seven_day_oauth_apps": { "utilization": 0.0, "resets_at": "2026-11-28T00:00:00Z" },
+                "model_scoped": [
+                    { "display_name": "Sonnet 5", "utilization": 20.0, "resets_at": "2026-11-28T00:00:00Z" }
+                ],
+                "extra_usage": {
+                    "is_enabled": true,
+                    "monthly_limit": 5000.0,
+                    "used_credits": 1200.0,
+                    "utilization": 24.0,
+                    "currency": "USD"
+                }
+            }
+        });
+        let usage = parse_claude_usage(&usage_raw, None);
+        assert_eq!(usage.status, ProviderUsageState::Available);
+        assert_eq!(usage.plan.as_deref(), Some("max"));
+        assert_eq!(usage.buckets.len(), 6);
+        assert_eq!(usage.buckets[0].id, "claude-5h");
+        assert!((usage.buckets[0].remaining_fraction.unwrap() - 0.60).abs() < 1e-6);
+        assert_eq!(usage.buckets[5].id, "claude-sonnet-5-weekly");
+        assert!(usage.extra_usage.unwrap().enabled);
+
+        let unavailable = parse_claude_usage(
+            &serde_json::json!({"subscription_type": null, "rate_limits_available": false, "rate_limits": null}),
+            None,
+        );
+        assert_eq!(unavailable.status, ProviderUsageState::Unavailable);
     }
 }

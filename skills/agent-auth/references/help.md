@@ -1,6 +1,6 @@
 ---
 created_on: 2026-11-21 07:00
-last_modified: 2026-11-21 07:00
+last_modified: 2026-11-21 08:05
 status: current
 ---
 
@@ -16,6 +16,7 @@ Use `agent-auth help [COMMAND...]` to query any documented command path. The gen
 - `agent-auth help provider list`
 - `agent-auth help provider logout`
 - `agent-auth help provider status`
+- `agent-auth help provider usage`
 - `agent-auth help session`
 - `agent-auth help session cancel`
 - `agent-auth help session list`
@@ -29,6 +30,7 @@ Use `agent-auth help [COMMAND...]` to query any documented command path. The gen
 - `agent-auth provider help list`
 - `agent-auth provider help logout`
 - `agent-auth provider help status`
+- `agent-auth provider help usage`
 - `agent-auth session help`
 - `agent-auth session help cancel`
 - `agent-auth session help help`

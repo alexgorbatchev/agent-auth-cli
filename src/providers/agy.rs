@@ -3,7 +3,8 @@ use crate::{
     process,
     protocol::{
         AccountInfo, AuthChallenge, AuthMethod, ExpectedInput, ExpectedInputKind,
-        ProviderAuthState, ProviderStatusReport, SCHEMA_VERSION, UsageBucket,
+        ProviderAuthState, ProviderStatusReport, ProviderUsageReport, ProviderUsageState,
+        SCHEMA_VERSION, UsageBucket,
     },
     providers::{
         ActiveLogin, LoginCommand, ProviderAdapter, ProviderContext, extract_https_url,
@@ -128,6 +129,10 @@ impl AgyActiveLogin {
 impl ProviderAdapter for AgyProvider {
     fn id(&self) -> &'static str {
         "agy"
+    }
+
+    fn aliases(&self) -> &'static [&'static str] {
+        &["antigravity"]
     }
 
     fn binary_name(&self) -> &'static str {
@@ -275,6 +280,39 @@ impl ProviderAdapter for AgyProvider {
         })
     }
 
+    async fn usage(&self, ctx: &ProviderContext, timeout: Duration) -> Result<ProviderUsageReport> {
+        let status = self.status(ctx, timeout).await?;
+        match status.status {
+            ProviderAuthState::Authenticated => Ok(ProviderUsageReport {
+                schema_version: SCHEMA_VERSION,
+                provider: self.id().to_owned(),
+                status: ProviderUsageState::Available,
+                plan: None,
+                buckets: status.account.map(|a| a.usage_buckets).unwrap_or_default(),
+                extra_usage: None,
+                error: None,
+            }),
+            ProviderAuthState::Unauthenticated => Ok(ProviderUsageReport {
+                schema_version: SCHEMA_VERSION,
+                provider: self.id().to_owned(),
+                status: ProviderUsageState::Unauthenticated,
+                plan: None,
+                buckets: Vec::new(),
+                extra_usage: None,
+                error: None,
+            }),
+            ProviderAuthState::Error => Ok(ProviderUsageReport {
+                schema_version: SCHEMA_VERSION,
+                provider: self.id().to_owned(),
+                status: ProviderUsageState::Error,
+                plan: None,
+                buckets: Vec::new(),
+                extra_usage: None,
+                error: status.error,
+            }),
+        }
+    }
+
     async fn start_session(
         &self,
         _method: AuthMethod,
@@ -416,14 +454,28 @@ pub(crate) fn parse_agy_usage_status(raw: &str) -> Option<ProviderStatusReport> 
         .and_then(Value::as_array)
     {
         for group in groups {
+            let group_name = group.get("name").and_then(Value::as_str).map(str::to_owned);
             if let Some(buckets) = group.get("buckets").and_then(Value::as_array) {
                 for bucket in buckets {
                     if let Some(id) = bucket.get("id").and_then(Value::as_str) {
+                        let remaining_fraction = bucket
+                            .get("remaining_fraction")
+                            .and_then(Value::as_f64)
+                            .map(|f| f.clamp(0.0, 1.0));
+                        let used_fraction = remaining_fraction.map(|r| (1.0 - r).clamp(0.0, 1.0));
                         usage_buckets.push(UsageBucket {
                             id: id.to_owned(),
-                            remaining_fraction: bucket
-                                .get("remaining_fraction")
-                                .and_then(Value::as_f64),
+                            group: group_name.clone(),
+                            label: bucket
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                            window: bucket
+                                .get("window")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                            used_fraction,
+                            remaining_fraction,
                             reset_time: bucket
                                 .get("reset_time")
                                 .and_then(Value::as_str)

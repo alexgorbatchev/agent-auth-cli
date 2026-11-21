@@ -1,10 +1,10 @@
 ---
 name: agent-auth
-description: Use when operating agent-auth to check provider authentication status or run non-blocking OAuth and device-code sign-in flows for codex, claude, and agy.
+description: Use when operating agent-auth to check provider authentication status, inspect normalized usage quotas, or run non-blocking OAuth and device-code sign-in flows for codex, claude, and agy (antigravity).
 author: alexgorbatchev
 metadata:
   created_on: 2026-11-21 07:00
-  last_modified: 2026-11-21 07:00
+  last_modified: 2026-11-21 08:25
   status: current
 ---
 
@@ -26,13 +26,13 @@ Set `AGENT=1` for compact `key:value` lines, or add `--json` for versioned JSON 
 4. Complete the session:
    - When `expected_input.required` is `false` and the user did not paste a callback URL (e.g., `codex` device flow or local callback):
      ```sh
-     AGENT=1 agent-auth session wait <SESSION_ID> --json
+     AGENT=1 agent-auth session wait <id> --json
      ```
    - When the user returned an authorization code or callback URL (e.g., `claude`, `agy`, or remote `codex --method oauth`):
      ```sh
-     printf '%s' "$USER_INPUT" | AGENT=1 agent-auth session submit <SESSION_ID> --input-stdin --json
+     printf '%s' "$USER_INPUT" | AGENT=1 agent-auth session submit <id> --input-stdin --json
      ```
-5. Cancel an abandoned session cleanly with `AGENT=1 agent-auth session cancel <SESSION_ID> --json`.
+5. Cancel an abandoned session cleanly with `AGENT=1 agent-auth session cancel <id> --json`.
 
 ## Exit codes
 

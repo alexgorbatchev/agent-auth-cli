@@ -28,6 +28,35 @@ if args[:2] == ["auth", "logout"]:
         os.remove(state)
     sys.exit(0)
 
+if args[:1] == ["-p"]:
+    for raw in sys.stdin:
+        raw = raw.strip()
+        if not raw:
+            continue
+        msg = json.loads(raw)
+        req = msg.get("request") or {}
+        req_id = msg.get("request_id")
+        if req.get("subtype") == "initialize":
+            sys.stdout.write(json.dumps({"type": "control_response", "response": {"subtype": "success", "request_id": req_id, "response": {}}}) + "\n")
+            sys.stdout.flush()
+        elif req.get("subtype") == "get_usage":
+            if os.path.exists(os.path.join(home, ".claude-no-limits")):
+                resp = {"subscription_type": None, "rate_limits_available": False, "rate_limits": None, "behaviors": None}
+            else:
+                resp = {
+                    "subscription_type": "max",
+                    "rate_limits_available": True,
+                    "rate_limits": {
+                        "five_hour": {"utilization": 32.0, "resets_at": "2026-11-21T20:00:00Z"},
+                        "seven_day": {"utilization": 12.0, "resets_at": "2026-11-28T00:00:00Z"},
+                        "extra_usage": {"is_enabled": False, "monthly_limit": None, "used_credits": None, "utilization": None, "currency": "USD"},
+                    },
+                    "behaviors": None,
+                }
+            sys.stdout.write(json.dumps({"type": "control_response", "response": {"subtype": "success", "request_id": req_id, "response": resp}}) + "\n")
+            sys.stdout.flush()
+    sys.exit(0)
+
 if args[:2] == ["auth", "login"]:
     browser = os.environ.get("BROWSER")
     if browser:
@@ -153,7 +182,7 @@ async fn claude_oauth_suppresses_browser_submits_via_stdin_and_handles_invalid_c
     assert_eq!(done["account"]["email"], "custom@example.com");
     assert_eq!(done["account"]["auth_method"], "console");
 
-    // Verify status & logout
+    // Verify status, usage & logout
     out.clear();
     cli::execute(
         [
@@ -174,6 +203,56 @@ async fn claude_oauth_suppresses_browser_submits_via_stdin_and_handles_invalid_c
     .unwrap();
     let st: serde_json::Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(st["status"], "authenticated");
+
+    out.clear();
+    cli::execute(
+        [
+            "agent-auth",
+            "provider",
+            "usage",
+            "claude",
+            "--provider-bin",
+            bin.to_str().unwrap(),
+            "--home",
+            home.to_str().unwrap(),
+            "--json",
+        ],
+        &env,
+        &mut out,
+    )
+    .await
+    .unwrap();
+    let cu: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(cu["status"], "available");
+    assert_eq!(cu["plan"], "max");
+    assert_eq!(cu["buckets"][0]["id"], "claude-5h");
+    assert_eq!(cu["buckets"][1]["id"], "claude-weekly");
+
+    // Unavailable plan rate limits
+    fs::write(home.join(".claude-no-limits"), "1").unwrap();
+    out.clear();
+    cli::execute(
+        [
+            "agent-auth",
+            "provider",
+            "usage",
+            "claude",
+            "--provider-bin",
+            bin.to_str().unwrap(),
+            "--home",
+            home.to_str().unwrap(),
+            "--json",
+        ],
+        &env,
+        &mut out,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&out).unwrap()["status"],
+        "unavailable"
+    );
+    fs::remove_file(home.join(".claude-no-limits")).unwrap();
 
     out.clear();
     cli::execute(

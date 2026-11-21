@@ -54,6 +54,31 @@ if len(sys.argv) >= 2 and sys.argv[1] == "app-server":
             if os.path.exists(auth_file):
                 acct = json.loads(open(auth_file).read())
             send({"id": req_id, "result": {"account": acct, "requiresOpenaiAuth": True}})
+        elif method == "account/rateLimits/read":
+            send({
+                "id": req_id,
+                "result": {
+                    "ordinaryUsageAllowed": True,
+                    "rateLimits": {
+                        "limitId": "codex",
+                        "limitName": None,
+                        "planType": "pro",
+                        "primary": {"usedPercent": 86, "windowDurationMins": 10080, "resetsAt": 1795474367},
+                        "secondary": {"usedPercent": 15, "windowDurationMins": 300, "resetsAt": 1795400000},
+                        "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
+                    },
+                    "rateLimitsByLimitId": {
+                        "codex": {
+                            "limitId": "codex",
+                            "limitName": None,
+                            "planType": "pro",
+                            "primary": {"usedPercent": 86, "windowDurationMins": 10080, "resetsAt": 1795474367},
+                            "secondary": {"usedPercent": 15, "windowDurationMins": 300, "resetsAt": 1795400000},
+                            "credits": {"hasCredits": False, "unlimited": False, "balance": "0"},
+                        }
+                    },
+                },
+            })
         elif method == "account/login/start":
             kind = params.get("type")
             if os.path.exists(port_conflict_flag) and kind == "chatgpt":
@@ -151,7 +176,7 @@ async fn codex_device_flow_is_default_completes_in_background_and_checks_status_
     let bin = write_fake_codex(tmp.path());
     let env = env_for(tmp.path(), Mode::Agent);
 
-    // Unauthenticated initially
+    // Unauthenticated status & usage initially
     let mut out = Vec::new();
     cli::execute(
         [
@@ -172,6 +197,27 @@ async fn codex_device_flow_is_default_completes_in_background_and_checks_status_
     .unwrap();
     let st: serde_json::Value = serde_json::from_slice(&out).unwrap();
     assert_eq!(st["status"], "unauthenticated");
+
+    out.clear();
+    cli::execute(
+        [
+            "agent-auth",
+            "provider",
+            "usage",
+            "codex",
+            "--provider-bin",
+            bin.to_str().unwrap(),
+            "--home",
+            home.to_str().unwrap(),
+            "--json",
+        ],
+        &env,
+        &mut out,
+    )
+    .await
+    .unwrap();
+    let u0: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(u0["status"], "unauthenticated");
 
     // Start (defaults to device!)
     out.clear();
@@ -241,7 +287,52 @@ async fn codex_device_flow_is_default_completes_in_background_and_checks_status_
         let s = String::from_utf8(status_out).unwrap();
         assert!(s.contains("authenticated"));
         assert!(s.contains("device@example.com"));
+
+        let mut usage_out = Vec::new();
+        cli::execute(
+            [
+                "agent-auth",
+                "provider",
+                "usage",
+                "codex",
+                "--provider-bin",
+                bin.to_str().unwrap(),
+                "--home",
+                home.to_str().unwrap(),
+            ],
+            &env_for(tmp.path(), mode),
+            &mut usage_out,
+        )
+        .await
+        .unwrap();
+        let us = String::from_utf8(usage_out).unwrap();
+        assert!(us.contains("codex-weekly"));
+        assert!(us.contains("codex-5h"));
     }
+
+    // Usage JSON structure check
+    out.clear();
+    cli::execute(
+        [
+            "agent-auth",
+            "provider",
+            "usage",
+            "codex",
+            "--provider-bin",
+            bin.to_str().unwrap(),
+            "--home",
+            home.to_str().unwrap(),
+            "--json",
+        ],
+        &env,
+        &mut out,
+    )
+    .await
+    .unwrap();
+    let u_json: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(u_json["status"], "available");
+    assert_eq!(u_json["buckets"].as_array().unwrap().len(), 2);
+    assert_eq!(u_json["buckets"][0]["id"], "codex-weekly");
 
     // Logout
     out.clear();

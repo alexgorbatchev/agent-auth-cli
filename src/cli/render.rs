@@ -1,9 +1,10 @@
 use crate::{
     error::Result,
     protocol::{
-        AccountInfo, ErrorDetail, ErrorEnvelope, ProviderAuthState, ProviderListReport,
-        ProviderLogoutReport, ProviderStatusListReport, ProviderStatusReport, SCHEMA_VERSION,
-        SessionListReport, SessionSnapshot, SessionState,
+        AccountInfo, ErrorDetail, ErrorEnvelope, ExtraUsageInfo, ProviderAuthState,
+        ProviderListReport, ProviderLogoutReport, ProviderStatusListReport, ProviderStatusReport,
+        ProviderUsageListReport, ProviderUsageReport, ProviderUsageState, SCHEMA_VERSION,
+        SessionListReport, SessionSnapshot, SessionState, UsageBucket,
     },
 };
 use cli_command_kit::Mode;
@@ -64,9 +65,15 @@ pub fn render_provider_list(
             let mut buf = String::new();
             for p in &report.providers {
                 let methods: Vec<&str> = p.supported_methods.iter().map(|m| m.as_str()).collect();
+                let aliases = if p.aliases.is_empty() {
+                    "-".to_owned()
+                } else {
+                    p.aliases.join(",")
+                };
                 buf.push_str(&format!(
-                    "provider:{} binary:{} available:{} default_method:{} methods:{} supports_logout:{}\n",
+                    "provider:{} aliases:{} binary:{} available:{} default_method:{} methods:{} supports_logout:{}\n",
                     p.id,
+                    aliases,
                     p.binary,
                     p.available,
                     p.default_method,
@@ -80,6 +87,7 @@ pub fn render_provider_list(
             let mut table = Table::new();
             table.set_header(vec![
                 "Provider",
+                "Aliases",
                 "Binary",
                 "Available",
                 "Default Method",
@@ -88,8 +96,14 @@ pub fn render_provider_list(
             ]);
             for p in &report.providers {
                 let methods: Vec<&str> = p.supported_methods.iter().map(|m| m.as_str()).collect();
+                let aliases = if p.aliases.is_empty() {
+                    "-".to_owned()
+                } else {
+                    p.aliases.join(", ")
+                };
                 table.add_row(vec![
                     p.id.as_str(),
+                    &aliases,
                     p.binary.as_str(),
                     if p.available { "yes" } else { "no" },
                     p.default_method.as_str(),
@@ -206,6 +220,236 @@ pub fn render_provider_status_list(
             write_folded(out, &format!("{table}\n"), home)
         }
     }
+}
+
+pub fn render_provider_usage(
+    out: &mut dyn Write,
+    report: &ProviderUsageReport,
+    format: OutputFormat,
+    home: Option<&Path>,
+) -> Result<()> {
+    match format {
+        OutputFormat::Json => {
+            let line = serde_json::to_string(report)?;
+            write_folded(out, &format!("{line}\n"), home)
+        }
+        OutputFormat::Agent => {
+            let mut buf = format!("provider:{} status:{}", report.provider, report.status);
+            if let Some(plan) = &report.plan {
+                buf.push_str(&format!(" plan:{plan}"));
+            }
+            buf.push('\n');
+            for b in &report.buckets {
+                buf.push_str(&format_bucket_agent(None, b));
+            }
+            if let Some(ex) = &report.extra_usage {
+                buf.push_str(&format_extra_usage_agent(None, ex));
+            }
+            if let Some(err) = &report.error {
+                buf.push_str(&format!(
+                    "error_code:{}\nerror_message:{}\n",
+                    err.code, err.message
+                ));
+            }
+            write_folded(out, &buf, home)
+        }
+        OutputFormat::Human => {
+            let tag = usage_status_tag(report.status);
+            let plan_suffix = report
+                .plan
+                .as_deref()
+                .map(|p| format!(" ({p})"))
+                .unwrap_or_default();
+            let mut buf = format!(
+                "{tag} {}{plan_suffix}: {}\n",
+                report.provider, report.status
+            );
+            if !report.buckets.is_empty() {
+                let mut table = Table::new();
+                table.set_header(vec!["Bucket", "Window", "Used", "Remaining", "Resets At"]);
+                for b in &report.buckets {
+                    table.add_row(vec![
+                        b.id.as_str(),
+                        b.window.as_deref().unwrap_or("-"),
+                        &format_pct(b.used_fraction),
+                        &format_pct(b.remaining_fraction),
+                        b.reset_time.as_deref().unwrap_or("-"),
+                    ]);
+                }
+                buf.push_str(&format!("{table}\n"));
+            }
+            if let Some(ex) = &report.extra_usage {
+                buf.push_str(&format!(
+                    "  Extra usage: {}\n",
+                    format_extra_usage_human(ex)
+                ));
+            }
+            if let Some(err) = &report.error {
+                buf.push_str(&format!("  Error: {} ({})\n", err.message, err.code));
+            }
+            write_folded(out, &buf, home)
+        }
+    }
+}
+
+pub fn render_provider_usage_list(
+    out: &mut dyn Write,
+    report: &ProviderUsageListReport,
+    format: OutputFormat,
+    home: Option<&Path>,
+) -> Result<()> {
+    match format {
+        OutputFormat::Json => {
+            let line = serde_json::to_string(report)?;
+            write_folded(out, &format!("{line}\n"), home)
+        }
+        OutputFormat::Agent => {
+            let mut buf = String::new();
+            for item in &report.providers {
+                buf.push_str(&format!(
+                    "provider:{} status:{}",
+                    item.provider, item.status
+                ));
+                if let Some(plan) = &item.plan {
+                    buf.push_str(&format!(" plan:{plan}"));
+                }
+                if let Some(err) = &item.error {
+                    buf.push_str(&format!(" error_code:{}", err.code));
+                }
+                buf.push('\n');
+                for b in &item.buckets {
+                    buf.push_str(&format_bucket_agent(Some(&item.provider), b));
+                }
+                if let Some(ex) = &item.extra_usage {
+                    buf.push_str(&format_extra_usage_agent(Some(&item.provider), ex));
+                }
+            }
+            write_folded(out, &buf, home)
+        }
+        OutputFormat::Human => {
+            let mut table = Table::new();
+            table.set_header(vec![
+                "Provider",
+                "Status",
+                "Bucket",
+                "Window",
+                "Used",
+                "Remaining",
+                "Resets At",
+            ]);
+            for item in &report.providers {
+                if item.buckets.is_empty() {
+                    let detail = item
+                        .error
+                        .as_ref()
+                        .map(|e| e.message.as_str())
+                        .unwrap_or("-");
+                    table.add_row(vec![
+                        item.provider.as_str(),
+                        item.status.as_str(),
+                        detail,
+                        "-",
+                        "-",
+                        "-",
+                        "-",
+                    ]);
+                } else {
+                    for b in &item.buckets {
+                        table.add_row(vec![
+                            item.provider.as_str(),
+                            item.status.as_str(),
+                            b.id.as_str(),
+                            b.window.as_deref().unwrap_or("-"),
+                            &format_pct(b.used_fraction),
+                            &format_pct(b.remaining_fraction),
+                            b.reset_time.as_deref().unwrap_or("-"),
+                        ]);
+                    }
+                }
+            }
+            write_folded(out, &format!("{table}\n"), home)
+        }
+    }
+}
+
+fn usage_status_tag(status: ProviderUsageState) -> &'static str {
+    match status {
+        ProviderUsageState::Available => "[OK]",
+        ProviderUsageState::Unauthenticated => "[WARN]",
+        ProviderUsageState::Unavailable => "[INFO]",
+        ProviderUsageState::Error => "[ERR]",
+    }
+}
+
+fn format_pct(fraction: Option<f64>) -> String {
+    match fraction {
+        Some(f) => format!("{:.0}%", f * 100.0),
+        None => "-".into(),
+    }
+}
+
+fn format_bucket_agent(provider: Option<&str>, b: &UsageBucket) -> String {
+    let mut line = String::from("bucket:");
+    if let Some(p) = provider {
+        line.push_str(&format!("provider={p} "));
+    }
+    line.push_str(&format!("id={}", b.id));
+    if let Some(w) = &b.window {
+        line.push_str(&format!(" window={w}"));
+    }
+    if let Some(u) = b.used_fraction {
+        line.push_str(&format!(" used_pct={:.1}", u * 100.0));
+    }
+    if let Some(r) = b.remaining_fraction {
+        line.push_str(&format!(" remaining_pct={:.1}", r * 100.0));
+    }
+    if let Some(rt) = &b.reset_time {
+        line.push_str(&format!(" reset_time={rt}"));
+    }
+    line.push('\n');
+    line
+}
+
+fn format_extra_usage_agent(provider: Option<&str>, ex: &ExtraUsageInfo) -> String {
+    let mut line = String::from("extra_usage:");
+    if let Some(p) = provider {
+        line.push_str(&format!("provider={p} "));
+    }
+    line.push_str(&format!(
+        "enabled={} unlimited={}",
+        ex.enabled, ex.unlimited
+    ));
+    if let Some(bal) = &ex.balance {
+        line.push_str(&format!(" balance={bal}"));
+    }
+    if let Some(used) = ex.used_credits {
+        line.push_str(&format!(" used_credits={used:.2}"));
+    }
+    if let Some(limit) = ex.monthly_limit {
+        line.push_str(&format!(" monthly_limit={limit:.2}"));
+    }
+    if let Some(cur) = &ex.currency {
+        line.push_str(&format!(" currency={cur}"));
+    }
+    line.push('\n');
+    line
+}
+
+fn format_extra_usage_human(ex: &ExtraUsageInfo) -> String {
+    if ex.unlimited {
+        return "unlimited".into();
+    }
+    if !ex.enabled {
+        return "disabled".into();
+    }
+    if let Some(bal) = &ex.balance {
+        return format!("balance {bal}");
+    }
+    if let (Some(used), Some(limit)) = (ex.used_credits, ex.monthly_limit) {
+        let cur = ex.currency.as_deref().unwrap_or("");
+        return format!("{used:.0}/{limit:.0} {cur}").trim().to_owned();
+    }
+    "enabled".into()
 }
 
 pub fn render_provider_logout(
@@ -495,11 +739,19 @@ mod tests {
                 usage_buckets: vec![
                     UsageBucket {
                         id: "gemini-weekly".into(),
+                        group: Some("Gemini Models".into()),
+                        label: Some("Weekly Limit".into()),
+                        window: Some("weekly".into()),
+                        used_fraction: Some(0.05),
                         remaining_fraction: Some(0.95),
                         reset_time: Some("2026-11-28T14:08:15Z".into()),
                     },
                     UsageBucket {
                         id: "gemini-5h".into(),
+                        group: None,
+                        label: None,
+                        window: None,
+                        used_fraction: None,
                         remaining_fraction: None,
                         reset_time: None,
                     },
@@ -634,5 +886,97 @@ mod tests {
             }
         }
         assert_eq!(fold_path(Path::new("/tmp/x"), None), "/tmp/x");
+
+        let usage_avail = ProviderUsageReport {
+            schema_version: SCHEMA_VERSION,
+            provider: "codex".into(),
+            status: ProviderUsageState::Available,
+            plan: Some("promax".into()),
+            buckets: report.account.as_ref().unwrap().usage_buckets.clone(),
+            extra_usage: Some(ExtraUsageInfo {
+                enabled: true,
+                unlimited: false,
+                used_credits: Some(1200.0),
+                monthly_limit: Some(5000.0),
+                balance: None,
+                currency: Some("USD".into()),
+                used_fraction: Some(0.24),
+            }),
+            error: None,
+        };
+        let usage_list = ProviderUsageListReport {
+            schema_version: SCHEMA_VERSION,
+            providers: vec![
+                usage_avail.clone(),
+                ProviderUsageReport {
+                    schema_version: SCHEMA_VERSION,
+                    provider: "claude".into(),
+                    status: ProviderUsageState::Unauthenticated,
+                    plan: None,
+                    buckets: Vec::new(),
+                    extra_usage: None,
+                    error: None,
+                },
+                ProviderUsageReport {
+                    schema_version: SCHEMA_VERSION,
+                    provider: "agy".into(),
+                    status: ProviderUsageState::Error,
+                    plan: None,
+                    buckets: Vec::new(),
+                    extra_usage: None,
+                    error: Some(err_detail.clone()),
+                },
+            ],
+        };
+        for fmt in [OutputFormat::Human, OutputFormat::Agent, OutputFormat::Json] {
+            let mut u1 = Vec::new();
+            render_provider_usage(&mut u1, &usage_avail, fmt, None).unwrap();
+            assert!(!u1.is_empty());
+
+            let mut u2 = Vec::new();
+            render_provider_usage(&mut u2, &usage_list.providers[2], fmt, None).unwrap();
+            assert!(!u2.is_empty());
+
+            let mut ul = Vec::new();
+            render_provider_usage_list(&mut ul, &usage_list, fmt, None).unwrap();
+            assert!(!ul.is_empty());
+        }
+        assert_eq!(usage_status_tag(ProviderUsageState::Unavailable), "[INFO]");
+        assert_eq!(
+            format_extra_usage_human(&ExtraUsageInfo {
+                enabled: true,
+                unlimited: true,
+                used_credits: None,
+                monthly_limit: None,
+                balance: None,
+                currency: None,
+                used_fraction: None,
+            }),
+            "unlimited"
+        );
+        assert_eq!(
+            format_extra_usage_human(&ExtraUsageInfo {
+                enabled: false,
+                unlimited: false,
+                used_credits: None,
+                monthly_limit: None,
+                balance: None,
+                currency: None,
+                used_fraction: None,
+            }),
+            "disabled"
+        );
+        assert_eq!(
+            format_extra_usage_human(&ExtraUsageInfo {
+                enabled: true,
+                unlimited: false,
+                used_credits: None,
+                monthly_limit: None,
+                balance: Some("10".into()),
+                currency: None,
+                used_fraction: None,
+            }),
+            "balance 10"
+        );
     }
 }

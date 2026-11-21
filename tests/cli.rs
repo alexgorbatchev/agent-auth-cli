@@ -23,6 +23,7 @@ fn help_paths_include_agent_alert_and_human_tree_glyphs() {
             vec!["provider"],
             vec!["provider", "list"],
             vec!["provider", "status"],
+            vec!["provider", "usage"],
             vec!["provider", "logout"],
             vec!["session"],
             vec!["session", "start"],
@@ -54,6 +55,7 @@ fn help_paths_include_agent_alert_and_human_tree_glyphs() {
             );
             if mode == Mode::Human && args == vec!["agent-auth", "--help"] {
                 assert!(rendered.contains("├─") || rendered.contains("╰─"));
+                assert!(rendered.contains("skill"));
                 assert!(!rendered.contains("__worker"));
                 assert!(!rendered.contains("__noop-opener"));
             }
@@ -89,6 +91,9 @@ async fn provider_list_and_completion_render_cleanly_in_all_modes() {
         assert_eq!(val["providers"].as_array().unwrap().len(), 3);
         assert_eq!(val["providers"][0]["id"], "codex");
         assert_eq!(val["providers"][0]["default_method"], "device");
+        assert_eq!(val["providers"][2]["id"], "agy");
+        assert_eq!(val["providers"][2]["aliases"][0], "antigravity");
+        assert!(text.contains("antigravity"));
     }
 
     let env = test_env(Mode::Human, tmp.path());
@@ -135,21 +140,17 @@ async fn error_handling_and_argument_validation() {
     .unwrap_err();
     assert_eq!(err.code(), "unsupported_method");
 
-    // --provider-bin requires a single provider on provider status
-    let err = cli::execute(
-        [
-            "agent-auth",
-            "provider",
-            "status",
-            "--provider-bin",
-            "/bin/true",
-        ],
-        &env,
-        &mut Vec::new(),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(err.code(), "invalid_input");
+    // --provider-bin requires a single provider on provider status and provider usage
+    for sub in ["status", "usage"] {
+        let err = cli::execute(
+            ["agent-auth", "provider", sub, "--provider-bin", "/bin/true"],
+            &env,
+            &mut Vec::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "invalid_input");
+    }
 
     // Conflicting submit flags
     let err = cli::execute(
@@ -179,16 +180,18 @@ async fn error_handling_and_argument_validation() {
     .unwrap_err();
     assert_eq!(err.code(), "session_not_found");
 
-    // Agy logout returns typed unsupported_operation
-    let err = cli::execute(
-        ["agent-auth", "provider", "logout", "agy"],
-        &env,
-        &mut Vec::new(),
-    )
-    .await
-    .unwrap_err();
-    assert_eq!(err.code(), "unsupported_operation");
-    assert!(err.hint().unwrap().contains("/logout"));
+    // Agy (and its `antigravity` alias) logout returns typed unsupported_operation
+    for name in ["agy", "antigravity"] {
+        let err = cli::execute(
+            ["agent-auth", "provider", "logout", name],
+            &env,
+            &mut Vec::new(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), "unsupported_operation");
+        assert!(err.hint().unwrap().contains("/logout"));
+    }
 
     // ErrorDetail roundtrip conversions
     for code in [

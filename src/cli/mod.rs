@@ -7,8 +7,8 @@ use crate::{
     error::{AuthError, Result},
     protocol::{
         AuthMethod, AuthMethodChoice, ProviderAuthState, ProviderListReport, ProviderLogoutReport,
-        ProviderStatusListReport, ProviderStatusReport, SCHEMA_VERSION, SessionListReport,
-        SessionState,
+        ProviderStatusListReport, ProviderStatusReport, ProviderUsageListReport,
+        ProviderUsageReport, ProviderUsageState, SCHEMA_VERSION, SessionListReport, SessionState,
     },
     providers::ProviderRegistry,
     sandbox::{self, Sandbox},
@@ -228,7 +228,7 @@ async fn execute_inner(
                 } else {
                     if explicit_bin.is_some() {
                         return Err(AuthError::InvalidInput(
-                            "--provider-bin requires naming a single PROVIDER".into(),
+                            "--provider-bin requires naming a single provider".into(),
                         ));
                     }
                     let mut reports = Vec::new();
@@ -264,6 +264,88 @@ async fn execute_inner(
                         providers: reports,
                     };
                     render::render_provider_status_list(output, &list, format, home_ref)?;
+                    Ok(0)
+                }
+            }
+            Some(("usage", leaf)) => {
+                let explicit_bin = leaf
+                    .get_one::<PathBuf>("provider-bin")
+                    .map(PathBuf::as_path);
+                let home_override = leaf.get_one::<PathBuf>("home").cloned();
+                let timeout = Duration::from_secs(*leaf.get_one::<u64>("timeout").unwrap());
+                store::ensure_runtime_dir(&runtime_dir)?;
+                let sandbox = Arc::new(Sandbox::new_for_exe(
+                    &runtime_dir,
+                    "usage",
+                    &environment.worker_exe,
+                )?);
+
+                if let Some(provider_id) = leaf.get_one::<String>("provider") {
+                    let adapter = registry.get(provider_id)?;
+                    let ctx = registry.build_context(
+                        adapter.as_ref(),
+                        explicit_bin,
+                        home_override,
+                        sandbox,
+                    )?;
+                    let report = adapter.usage(&ctx, timeout).await?;
+                    render::render_provider_usage(output, &report, format, home_ref)?;
+                    Ok(0)
+                } else {
+                    if explicit_bin.is_some() {
+                        return Err(AuthError::InvalidInput(
+                            "--provider-bin requires naming a single provider".into(),
+                        ));
+                    }
+                    let mut set = tokio::task::JoinSet::new();
+                    let fold_home = environment.home.clone();
+                    for (idx, adapter) in registry.all().iter().cloned().enumerate() {
+                        let ctx_res = registry.build_context(
+                            adapter.as_ref(),
+                            None,
+                            home_override.clone(),
+                            Arc::clone(&sandbox),
+                        );
+                        let fold_home = fold_home.clone();
+                        set.spawn(async move {
+                            let report = match ctx_res {
+                                Ok(ctx) => match adapter.usage(&ctx, timeout).await {
+                                    Ok(r) => r,
+                                    Err(err) => ProviderUsageReport {
+                                        schema_version: SCHEMA_VERSION,
+                                        provider: adapter.id().to_owned(),
+                                        status: ProviderUsageState::Error,
+                                        plan: None,
+                                        buckets: Vec::new(),
+                                        extra_usage: None,
+                                        error: Some(err.to_detail(fold_home.as_deref())),
+                                    },
+                                },
+                                Err(err) => ProviderUsageReport {
+                                    schema_version: SCHEMA_VERSION,
+                                    provider: adapter.id().to_owned(),
+                                    status: ProviderUsageState::Error,
+                                    plan: None,
+                                    buckets: Vec::new(),
+                                    extra_usage: None,
+                                    error: Some(err.to_detail(fold_home.as_deref())),
+                                },
+                            };
+                            (idx, report)
+                        });
+                    }
+                    let mut indexed = Vec::new();
+                    while let Some(res) = set.join_next().await {
+                        if let Ok(pair) = res {
+                            indexed.push(pair);
+                        }
+                    }
+                    indexed.sort_by_key(|(idx, _)| *idx);
+                    let list = ProviderUsageListReport {
+                        schema_version: SCHEMA_VERSION,
+                        providers: indexed.into_iter().map(|(_, r)| r).collect(),
+                    };
+                    render::render_provider_usage_list(output, &list, format, home_ref)?;
                     Ok(0)
                 }
             }

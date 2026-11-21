@@ -162,8 +162,71 @@ impl fmt::Display for SessionState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageBucket {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_fraction: Option<f64>,
     pub remaining_fraction: Option<f64>,
     pub reset_time: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExtraUsageInfo {
+    pub enabled: bool,
+    pub unlimited: bool,
+    pub used_credits: Option<f64>,
+    pub monthly_limit: Option<f64>,
+    pub balance: Option<String>,
+    pub currency: Option<String>,
+    pub used_fraction: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderUsageState {
+    Available,
+    Unauthenticated,
+    Unavailable,
+    Error,
+}
+
+impl ProviderUsageState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Unauthenticated => "unauthenticated",
+            Self::Unavailable => "unavailable",
+            Self::Error => "error",
+        }
+    }
+}
+
+impl fmt::Display for ProviderUsageState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProviderUsageReport {
+    pub schema_version: u32,
+    pub provider: String,
+    pub status: ProviderUsageState,
+    pub plan: Option<String>,
+    pub buckets: Vec<UsageBucket>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_usage: Option<ExtraUsageInfo>,
+    pub error: Option<ErrorDetail>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProviderUsageListReport {
+    pub schema_version: u32,
+    pub providers: Vec<ProviderUsageReport>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -202,6 +265,7 @@ pub struct SessionSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderDescriptor {
     pub id: String,
+    pub aliases: Vec<String>,
     pub binary: String,
     pub available: bool,
     pub default_method: AuthMethod,

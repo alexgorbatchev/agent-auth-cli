@@ -235,14 +235,14 @@ async fn agy_status_aborts_early_without_browser_and_acp_login_accepts_url_and_c
     .unwrap_err();
     assert_eq!(err.code(), "provider_failed");
 
-    // Start + cancel cleanly
+    // Start using `antigravity` alias + cancel cleanly (reports canonical provider `agy`)
     out.clear();
     cli::execute(
         [
             "agent-auth",
             "session",
             "start",
-            "agy",
+            "antigravity",
             "--provider-bin",
             bin.to_str().unwrap(),
             "--home",
@@ -254,10 +254,9 @@ async fn agy_status_aborts_early_without_browser_and_acp_login_accepts_url_and_c
     )
     .await
     .unwrap();
-    let sid_cancel = serde_json::from_slice::<serde_json::Value>(&out).unwrap()["session_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let started_alias: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(started_alias["provider"], "agy");
+    let sid_cancel = started_alias["session_id"].as_str().unwrap().to_owned();
     out.clear();
     cli::execute(
         ["agent-auth", "session", "cancel", &sid_cancel, "--json"],
@@ -270,6 +269,53 @@ async fn agy_status_aborts_early_without_browser_and_acp_login_accepts_url_and_c
         serde_json::from_slice::<serde_json::Value>(&out).unwrap()["status"],
         "cancelled"
     );
+
+    // Status & usage via `antigravity` alias both resolve to `agy`
+    out.clear();
+    cli::execute(
+        [
+            "agent-auth",
+            "provider",
+            "status",
+            "antigravity",
+            "--provider-bin",
+            bin.to_str().unwrap(),
+            "--home",
+            home.to_str().unwrap(),
+            "--json",
+        ],
+        &env,
+        &mut out,
+    )
+    .await
+    .unwrap();
+    let alias_status: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(alias_status["provider"], "agy");
+    assert_eq!(alias_status["status"], "authenticated");
+
+    out.clear();
+    cli::execute(
+        [
+            "agent-auth",
+            "provider",
+            "usage",
+            "antigravity",
+            "--provider-bin",
+            bin.to_str().unwrap(),
+            "--home",
+            home.to_str().unwrap(),
+            "--json",
+        ],
+        &env,
+        &mut out,
+    )
+    .await
+    .unwrap();
+    let alias_usage: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(alias_usage["provider"], "agy");
+    assert_eq!(alias_usage["status"], "available");
+    assert_eq!(alias_usage["buckets"][0]["id"], "gemini-weekly");
+    assert!((alias_usage["buckets"][0]["used_fraction"].as_f64().unwrap() - 0.01).abs() < 1e-6);
 
     // Fake agy exiting without URL surfaces provider_failed
     let bad_bin = tmp.path().join("bad-agy");

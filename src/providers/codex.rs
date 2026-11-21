@@ -2,8 +2,9 @@ use crate::{
     error::{AuthError, Result},
     process,
     protocol::{
-        AccountInfo, AuthChallenge, AuthMethod, ExpectedInput, ExpectedInputKind,
-        ProviderAuthState, ProviderStatusReport, SCHEMA_VERSION,
+        AccountInfo, AuthChallenge, AuthMethod, ExpectedInput, ExpectedInputKind, ExtraUsageInfo,
+        ProviderAuthState, ProviderStatusReport, ProviderUsageReport, ProviderUsageState,
+        SCHEMA_VERSION, UsageBucket, format_rfc3339,
     },
     providers::{
         ActiveLogin, LoginCommand, ProviderAdapter, ProviderContext, required_json_str,
@@ -328,6 +329,55 @@ impl ProviderAdapter for CodexProvider {
         })
     }
 
+    async fn usage(&self, ctx: &ProviderContext, timeout: Duration) -> Result<ProviderUsageReport> {
+        let mut client = AppServerClient::spawn(ctx).await?;
+        if let Err(err) = client.initialize(timeout).await {
+            client.shutdown().await;
+            return Err(err);
+        }
+        let account = match client.read_account(timeout).await {
+            Ok(acct) => acct,
+            Err(err) => {
+                client.shutdown().await;
+                return Err(err);
+            }
+        };
+        let Some(account) = account else {
+            client.shutdown().await;
+            return Ok(ProviderUsageReport {
+                schema_version: SCHEMA_VERSION,
+                provider: self.id().to_owned(),
+                status: ProviderUsageState::Unauthenticated,
+                plan: None,
+                buckets: Vec::new(),
+                extra_usage: None,
+                error: None,
+            });
+        };
+        if account.auth_method.as_deref() != Some("chatgpt") {
+            client.shutdown().await;
+            return Ok(ProviderUsageReport {
+                schema_version: SCHEMA_VERSION,
+                provider: self.id().to_owned(),
+                status: ProviderUsageState::Unavailable,
+                plan: account.plan,
+                buckets: Vec::new(),
+                extra_usage: None,
+                error: None,
+            });
+        }
+        let limits_res = client
+            .request(
+                "account/rateLimits/read",
+                json!({ "excludeResetCreditDetails": true }),
+                timeout,
+            )
+            .await;
+        client.shutdown().await;
+        let result = limits_res?;
+        Ok(parse_codex_usage(&result, account.plan))
+    }
+
     async fn logout(&self, ctx: &ProviderContext, timeout: Duration) -> Result<()> {
         let mut cmd = Command::new(&ctx.binary);
         cmd.arg("logout")
@@ -434,6 +484,137 @@ impl ProviderAdapter for CodexProvider {
             method,
             challenge,
         }))
+    }
+}
+
+pub(crate) fn parse_codex_usage(
+    result: &Value,
+    fallback_plan: Option<String>,
+) -> ProviderUsageReport {
+    let mut snapshots: Vec<(String, &Value)> = Vec::new();
+    if let Some(map) = result.get("rateLimitsByLimitId").and_then(Value::as_object) {
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort();
+        for key in keys {
+            if let Some(val) = map.get(key) {
+                snapshots.push((key.clone(), val));
+            }
+        }
+    }
+    if snapshots.is_empty()
+        && let Some(single) = result.get("rateLimits")
+        && single.is_object()
+    {
+        let id = single
+            .get("limitId")
+            .and_then(Value::as_str)
+            .unwrap_or("codex")
+            .to_owned();
+        snapshots.push((id, single));
+    }
+
+    let mut plan = fallback_plan;
+    let mut buckets = Vec::new();
+    let mut extra_usage = None;
+
+    for (key, snap) in snapshots {
+        if plan.is_none() {
+            plan = snap
+                .get("planType")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        }
+        let limit_id = snap
+            .get("limitId")
+            .and_then(Value::as_str)
+            .unwrap_or(key.as_str());
+        let group = snap
+            .get("limitName")
+            .and_then(Value::as_str)
+            .unwrap_or(limit_id)
+            .to_owned();
+
+        for (slot, field) in [("primary", "primary"), ("secondary", "secondary")] {
+            if let Some(win) = snap.get(field).filter(|v| v.is_object()) {
+                let mins = win.get("windowDurationMins").and_then(Value::as_u64);
+                let window = mins
+                    .map(format_window_minutes)
+                    .unwrap_or_else(|| slot.into());
+                let used_pct = win.get("usedPercent").and_then(Value::as_f64);
+                let used_fraction = used_pct.map(|p| (p / 100.0).clamp(0.0, 1.0));
+                let remaining_fraction = used_fraction.map(|u| (1.0 - u).clamp(0.0, 1.0));
+                let reset_time = win
+                    .get("resetsAt")
+                    .and_then(Value::as_i64)
+                    .and_then(|ts| time::OffsetDateTime::from_unix_timestamp(ts).ok())
+                    .map(format_rfc3339);
+                let id = format!("{limit_id}-{window}");
+                let label = format!("{group} ({window})");
+                buckets.push(UsageBucket {
+                    id,
+                    group: Some(group.clone()),
+                    label: Some(label),
+                    window: Some(window),
+                    used_fraction,
+                    remaining_fraction,
+                    reset_time,
+                });
+            }
+        }
+
+        if extra_usage.is_none()
+            && let Some(credits) = snap.get("credits").filter(|v| v.is_object())
+        {
+            let has_credits = credits
+                .get("hasCredits")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let unlimited = credits
+                .get("unlimited")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let balance = credits
+                .get("balance")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if has_credits
+                || unlimited
+                || balance
+                    .as_deref()
+                    .is_some_and(|b| b != "0" && !b.is_empty())
+            {
+                extra_usage = Some(ExtraUsageInfo {
+                    enabled: has_credits || unlimited,
+                    unlimited,
+                    used_credits: None,
+                    monthly_limit: None,
+                    balance,
+                    currency: None,
+                    used_fraction: None,
+                });
+            }
+        }
+    }
+
+    ProviderUsageReport {
+        schema_version: SCHEMA_VERSION,
+        provider: "codex".into(),
+        status: ProviderUsageState::Available,
+        plan,
+        buckets,
+        extra_usage,
+        error: None,
+    }
+}
+
+fn format_window_minutes(mins: u64) -> String {
+    match mins {
+        300 => "5h".into(),
+        1440 => "daily".into(),
+        10080 => "weekly".into(),
+        m if m > 0 && m.is_multiple_of(1440) => format!("{}d", m / 1440),
+        m if m > 0 && m.is_multiple_of(60) => format!("{}h", m / 60),
+        m => format!("{m}m"),
     }
 }
 
@@ -649,5 +830,32 @@ mod tests {
             extract_redirect_uri(url).as_deref(),
             Some("http://127.0.0.1:1455/auth/callback")
         );
+
+        let usage_raw = json!({
+            "rateLimits": {
+                "limitId": "codex",
+                "limitName": null,
+                "planType": "promax",
+                "primary": { "usedPercent": 86, "windowDurationMins": 10080, "resetsAt": 1795474367 },
+                "secondary": { "usedPercent": 25, "windowDurationMins": 300, "resetsAt": 1795400000 },
+                "credits": { "hasCredits": true, "unlimited": false, "balance": "12.50" }
+            }
+        });
+        let usage = parse_codex_usage(&usage_raw, None);
+        assert_eq!(usage.status, ProviderUsageState::Available);
+        assert_eq!(usage.plan.as_deref(), Some("promax"));
+        assert_eq!(usage.buckets.len(), 2);
+        assert_eq!(usage.buckets[0].id, "codex-weekly");
+        assert!((usage.buckets[0].used_fraction.unwrap() - 0.86).abs() < 1e-6);
+        assert!((usage.buckets[0].remaining_fraction.unwrap() - 0.14).abs() < 1e-6);
+        assert_eq!(usage.buckets[1].id, "codex-5h");
+        assert_eq!(usage.extra_usage.unwrap().balance.as_deref(), Some("12.50"));
+
+        assert_eq!(format_window_minutes(300), "5h");
+        assert_eq!(format_window_minutes(1440), "daily");
+        assert_eq!(format_window_minutes(10080), "weekly");
+        assert_eq!(format_window_minutes(2880), "2d");
+        assert_eq!(format_window_minutes(120), "2h");
+        assert_eq!(format_window_minutes(45), "45m");
     }
 }
