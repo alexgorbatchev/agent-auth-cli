@@ -1,0 +1,7 @@
+/target
+/bin
+/.tmp
+/.state
+/.cache
+*.sqlite-wal
+*.sqlite-shm

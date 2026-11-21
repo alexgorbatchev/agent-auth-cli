@@ -1,0 +1,37 @@
+[package]
+name = "agent-auth-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+description = "Non-blocking OAuth login broker CLI for AI coding agent harnesses"
+
+[[bin]]
+name = "agent-auth"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = "0.1"
+clap = { version = "4.6", features = ["string"] }
+clap_complete = "4.6"
+cli-command-kit = { git = "https://github.com/alexgorbatchev/cli-command-kit-rust.git", rev = "dead4a60e08c7a84bc77ef329b220bfecd57627b" }
+comfy-table = "7"
+dirs = "7"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "parsing", "serde-well-known"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "process", "signal", "sync", "time"] }
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.dev]
+debug = "line-tables-only"
+incremental = true
+
+[profile.test]
+debug = "line-tables-only"
+incremental = true

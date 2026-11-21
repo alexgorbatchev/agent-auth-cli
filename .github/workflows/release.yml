@@ -1,0 +1,85 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v4
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - run: just setup
+      - run: just check
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            asset_os: darwin
+            asset_arch: arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            asset_os: darwin
+            asset_arch: amd64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            asset_os: linux
+            asset_arch: amd64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset_os: linux
+            asset_arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release archive
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          cargo build --release --locked --target "${{ matrix.target }}" --bin agent-auth
+          stage="target/release-stage"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.target }}/release/agent-auth" "$stage/agent-auth"
+          cp LICENSE "$stage/LICENSE"
+          archive="agent-auth_${version}_${{ matrix.asset_os }}_${{ matrix.asset_arch }}.tar.gz"
+          tar -C "$stage" -czf "$archive" agent-auth LICENSE
+          shasum -a 256 "$archive" > "${archive}.sha256" 2>/dev/null || sha256sum "$archive" > "${archive}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.asset_os }}-${{ matrix.asset_arch }}
+          path: |
+            agent-auth_*.tar.gz
+            agent-auth_*.tar.gz.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Combine checksums
+        run: cat artifacts/*.sha256 > artifacts/checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/agent-auth_*.tar.gz
+            artifacts/checksums.txt
