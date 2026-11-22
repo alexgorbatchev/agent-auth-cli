@@ -66,6 +66,8 @@ if args[:2] == ["auth", "login"]:
     sys.stdout.write("Paste code here if prompted > ")
     sys.stdout.flush()
     line = sys.stdin.readline()
+    with open(os.path.join(home, ".claude-stdin.log"), "a") as f:
+        f.write(line)
     code = line.strip()
     if code == "good-code#s123":
         method = "console" if "--console" in args else "claudeai"
@@ -159,7 +161,64 @@ async fn claude_oauth_suppresses_browser_submits_via_stdin_and_handles_invalid_c
     .unwrap_err();
     assert_eq!(err.code(), "invalid_input");
 
-    // Submit code via --input-stdin
+    // Submitting a Claude OAuth callback URL is rejected before writing to stdin,
+    // keeps the session awaiting_input, and never leaks submitted credentials.
+    let callback_url = "https://platform.claude.com/oauth/code/callback?code=secret-code-123&state=secret-state-456";
+    let url_err = cli::execute(
+        [
+            "agent-auth",
+            "session",
+            "submit",
+            &sid,
+            "--input",
+            callback_url,
+        ],
+        &env,
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(url_err.code(), "invalid_input");
+    let url_msg = url_err.to_string();
+    assert!(
+        url_msg.contains("code#state"),
+        "unexpected error: {url_msg}"
+    );
+    assert!(!url_msg.contains("secret-code-123"));
+    assert!(!url_msg.contains("secret-state-456"));
+    assert!(!url_msg.contains("platform.claude.com"));
+
+    // Session must remain awaiting_input (never exchanging) and nothing written to stdin
+    out.clear();
+    cli::execute(
+        ["agent-auth", "session", "status", &sid, "--json"],
+        &env,
+        &mut out,
+    )
+    .await
+    .unwrap();
+    let still_waiting: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(still_waiting["status"], "awaiting_input");
+    assert!(!home.join(".claude-stdin.log").exists());
+
+    // Scheme-less callback URL via --input-stdin is also rejected cleanly
+    let mut bad_stdin =
+        Cursor::new("platform.claude.com/oauth/code/callback?code=secret-2&state=st-2\n");
+    let schemeless_err = cli::execute_with_io(
+        ["agent-auth", "session", "submit", &sid, "--input-stdin"],
+        &env,
+        &mut bad_stdin,
+        &mut Vec::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(schemeless_err.code(), "invalid_input");
+    let schemeless_msg = schemeless_err.to_string();
+    assert!(schemeless_msg.contains("code#state"));
+    assert!(!schemeless_msg.contains("secret-2"));
+    assert!(!home.join(".claude-stdin.log").exists());
+
+    // Submit valid code#state via --input-stdin on the same session
     out.clear();
     let mut stdin = Cursor::new("good-code#s123\n");
     cli::execute_with_io(
@@ -181,6 +240,10 @@ async fn claude_oauth_suppresses_browser_submits_via_stdin_and_handles_invalid_c
     assert_eq!(done["status"], "authenticated");
     assert_eq!(done["account"]["email"], "custom@example.com");
     assert_eq!(done["account"]["auth_method"], "console");
+    assert_eq!(
+        fs::read_to_string(home.join(".claude-stdin.log")).unwrap(),
+        "good-code#s123\n"
+    );
 
     // Verify status, usage & logout
     out.clear();

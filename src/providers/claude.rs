@@ -113,6 +113,12 @@ impl ClaudeActiveLogin {
                 "claude login requires a non-empty authorization code".into(),
             ));
         }
+        if looks_like_callback_url(trimmed) {
+            return Err(AuthError::InvalidInput(
+                "claude login does not accept an OAuth callback URL; paste the full `code#state` string shown on the authorization page"
+                    .into(),
+            ));
+        }
         let stdin = self
             .stdin
             .as_mut()
@@ -125,6 +131,30 @@ impl ClaudeActiveLogin {
         stdin.flush().await?;
         Ok(())
     }
+}
+
+pub(crate) fn looks_like_callback_url(input: &str) -> bool {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return true;
+    }
+    if !trimmed.contains(char::is_whitespace)
+        && let Ok(parsed) = url::Url::parse(&format!("https://{trimmed}"))
+        && let Some(host) = parsed.host_str()
+        && (host.contains('.') || host == "localhost")
+    {
+        let path = parsed.path().to_ascii_lowercase();
+        let has_oauth_path = path.contains("/oauth") || path.contains("callback");
+        let has_code_query = parsed.query_pairs().any(|(k, _)| k == "code");
+        if has_oauth_path || has_code_query {
+            return true;
+        }
+    }
+    false
 }
 
 #[async_trait]
@@ -444,7 +474,7 @@ impl ProviderAdapter for ClaudeProvider {
                 kind: ExpectedInputKind::Code,
                 required: true,
                 prompt:
-                    "Open the URL, sign in, and paste the authorization code shown on the page."
+                    "Open the URL, sign in, and paste the full code#state string shown on the authorization page (not the callback URL)."
                         .into(),
             },
             callback_origin: None,
@@ -715,5 +745,28 @@ mod tests {
             None,
         );
         assert_eq!(unavailable.status, ProviderUsageState::Unavailable);
+    }
+
+    #[test]
+    fn detects_claude_oauth_callback_urls_without_rejecting_codes() {
+        assert!(looks_like_callback_url(
+            "https://platform.claude.com/oauth/code/callback?code=abc&state=def"
+        ));
+        assert!(looks_like_callback_url(
+            "HTTPS://console.anthropic.com/oauth/code/callback?code=abc&state=def"
+        ));
+        assert!(looks_like_callback_url(
+            "http://localhost:54321/callback?code=abc&state=def"
+        ));
+        assert!(looks_like_callback_url(
+            "platform.claude.com/oauth/code/callback?code=abc&state=def"
+        ));
+        assert!(looks_like_callback_url("localhost:54321/callback?code=abc"));
+
+        assert!(!looks_like_callback_url(""));
+        assert!(!looks_like_callback_url("   "));
+        assert!(!looks_like_callback_url("good-code#s123"));
+        assert!(!looks_like_callback_url("bad-code"));
+        assert!(!looks_like_callback_url("AbC123_+/==#XyZ456_+/=="));
     }
 }

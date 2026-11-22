@@ -1,6 +1,6 @@
 ---
 created_on: 2026-11-21 07:00
-last_modified: 2026-11-21 11:22
+last_modified: 2026-11-22 08:40
 status: current
 ---
 
@@ -18,7 +18,7 @@ status: current
 - **Default method:** `oauth` (`claude auth login`).
 - **Supported methods:** `oauth`.
 - **Browser policy:** Runs with a no-op `BROWSER` executable and `PATH` shims so no browser opens.
-- **`oauth` flow:** Captures the manual authorization URL (`expected_input.kind = "code"`, `required = true`). User pastes `<code>#<state>` back; agent submits it via `session submit <id> --input-stdin`.
+- **`oauth` flow:** Captures the manual authorization URL (`expected_input.kind = "code"`, `required = true`). User pastes the full `<code>#<state>` string shown on the authorization page; agent submits it via `session submit <id> --input-stdin`. OAuth callback URLs are rejected before writing to stdin and leave the session in `awaiting_input` so a corrected `code#state` can be submitted.
 - **Status / usage / logout:** `claude auth status` (JSON), `provider usage` sends `get_usage` (`skip_behaviors: true`) over `claude -p --input-format stream-json --output-format stream-json --verbose --no-session-persistence --setting-sources ""`, and `claude auth logout`.
 
 ### `agy` (alias: `antigravity`)
