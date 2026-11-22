@@ -4,7 +4,7 @@ description: Use when operating agent-auth to check provider authentication stat
 author: alexgorbatchev
 metadata:
   created_on: 2026-11-21 07:00
-  last_modified: 2026-11-21 08:25
+  last_modified: 2026-11-21 11:22
   status: current
 ---
 
@@ -20,7 +20,7 @@ Set `AGENT=1` for compact `key:value` lines, or add `--json` for versioned JSON 
    ```
 2. Start a session (exits immediately with `session_id`, `auth_url`, optional `user_code`, and `expected_input`):
    ```sh
-   AGENT=1 agent-auth session start codex --json
+   AGENT=1 agent-auth provider login codex --json
    ```
 3. Relay `auth_url` (and `user_code` when present) plus `expected_input.prompt` to the user.
 4. Complete the session:
@@ -36,7 +36,7 @@ Set `AGENT=1` for compact `key:value` lines, or add `--json` for versioned JSON 
 
 ## Exit codes
 
-- `0`: success (`awaiting_input` on `session start`, `authenticated`, `cancelled`, status/list/logout ok)
+- `0`: success (`awaiting_input` on `provider login`, `authenticated`, `cancelled`, status/list/logout ok)
 - `1`: operational, provider, session-missing/expired, or invalid-input failure
 - `2`: CLI argument parsing error
 - `3`: `session wait` timed out while the session is still active and pending (the current `SessionSnapshot` is printed to stdout)

@@ -349,6 +349,29 @@ async fn execute_inner(
                     Ok(0)
                 }
             }
+            Some(("login", leaf)) => {
+                let provider_id = leaf.get_one::<String>("provider").unwrap();
+                let adapter = registry.get(provider_id)?;
+                let choice = AuthMethodChoice::from_str(leaf.get_one::<String>("method").unwrap())
+                    .map_err(AuthError::InvalidInput)?;
+                let method = adapter.resolve_method(choice)?;
+                let opts = StartSessionOptions {
+                    worker_exe: environment.worker_exe.clone(),
+                    runtime_dir,
+                    provider: adapter.id().to_owned(),
+                    method,
+                    ttl_secs: *leaf.get_one::<u64>("ttl").unwrap(),
+                    start_timeout_secs: *leaf.get_one::<u64>("start-timeout").unwrap(),
+                    provider_bin: leaf.get_one::<PathBuf>("provider-bin").cloned(),
+                    home: leaf.get_one::<PathBuf>("home").cloned(),
+                    claude_console: leaf.get_flag("console"),
+                    claude_sso: leaf.get_flag("sso"),
+                    claude_email: leaf.get_one::<String>("email").cloned(),
+                };
+                let snapshot = worker::start_detached_session(&opts).await?;
+                render::render_session_snapshot(output, &snapshot, format, home_ref)?;
+                Ok(0)
+            }
             Some(("logout", leaf)) => {
                 let provider_id = leaf.get_one::<String>("provider").unwrap();
                 let adapter = registry.get(provider_id)?;
@@ -398,29 +421,6 @@ async fn execute_inner(
             _ => unreachable!(),
         },
         Some(("session", subject)) => match subject.subcommand() {
-            Some(("start", leaf)) => {
-                let provider_id = leaf.get_one::<String>("provider").unwrap();
-                let adapter = registry.get(provider_id)?;
-                let choice = AuthMethodChoice::from_str(leaf.get_one::<String>("method").unwrap())
-                    .map_err(AuthError::InvalidInput)?;
-                let method = adapter.resolve_method(choice)?;
-                let opts = StartSessionOptions {
-                    worker_exe: environment.worker_exe.clone(),
-                    runtime_dir,
-                    provider: adapter.id().to_owned(),
-                    method,
-                    ttl_secs: *leaf.get_one::<u64>("ttl").unwrap(),
-                    start_timeout_secs: *leaf.get_one::<u64>("start-timeout").unwrap(),
-                    provider_bin: leaf.get_one::<PathBuf>("provider-bin").cloned(),
-                    home: leaf.get_one::<PathBuf>("home").cloned(),
-                    claude_console: leaf.get_flag("console"),
-                    claude_sso: leaf.get_flag("sso"),
-                    claude_email: leaf.get_one::<String>("email").cloned(),
-                };
-                let snapshot = worker::start_detached_session(&opts).await?;
-                render::render_session_snapshot(output, &snapshot, format, home_ref)?;
-                Ok(0)
-            }
             Some(("submit", leaf)) => {
                 let session_id = leaf.get_one::<String>("session-id").unwrap();
                 let timeout_secs = *leaf.get_one::<u64>("timeout").unwrap();

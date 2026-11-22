@@ -99,8 +99,8 @@ async fn worker_supports_status_list_pending_wait_ttl_expiry_and_stale_reap() {
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "claude",
             "--ttl",
             "2",
@@ -289,8 +289,8 @@ async fn worker_handles_invalid_ipc_json_and_sigterm_shutdown() {
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "claude",
             "--ttl",
             "30",

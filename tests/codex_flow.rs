@@ -224,8 +224,8 @@ async fn codex_device_flow_is_default_completes_in_background_and_checks_status_
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "codex",
             "--provider-bin",
             bin.to_str().unwrap(),
@@ -372,8 +372,8 @@ async fn codex_oauth_flow_replays_callback_blocks_ssrf_and_reports_port_conflict
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "codex",
             "--method",
             "oauth",
@@ -447,8 +447,8 @@ async fn codex_oauth_flow_replays_callback_blocks_ssrf_and_reports_port_conflict
     let err = cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "codex",
             "--method",
             "oauth",
@@ -482,8 +482,8 @@ async fn codex_device_rejects_pasted_input_and_supports_clean_cancel() {
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "codex",
             "--provider-bin",
             bin.to_str().unwrap(),
@@ -529,8 +529,8 @@ async fn codex_device_rejects_pasted_input_and_supports_clean_cancel() {
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "codex",
             "--provider-bin",
             bin.to_str().unwrap(),
@@ -566,8 +566,8 @@ async fn codex_device_rejects_pasted_input_and_supports_clean_cancel() {
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "codex",
             "--provider-bin",
             bin.to_str().unwrap(),

@@ -102,7 +102,7 @@ impl AuthError {
             }
             Self::UnsupportedOperation { hint, .. } => Some(hint.clone()),
             Self::SessionNotFound(_) | Self::SessionExpired(_) => {
-                Some("Start a new login with `agent-auth session start <provider>`.".into())
+                Some("Start a new login with `agent-auth provider login <name>`.".into())
             }
             Self::CallbackPortInUse { .. } => Some(
                 "Close the conflicting local login listener or retry with --method device.".into(),

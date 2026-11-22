@@ -11,13 +11,13 @@
 # How It Works
 
 - Check whether a provider is already signed in with `agent-auth provider status`, or inspect normalized rate-limit usage across all providers with `agent-auth provider usage`.
-- Start a login session with `agent-auth session start <provider>`; the command prints the `session_id`, `auth_url`, optional `user_code`, and expected user action, then exits immediately.
+- Start a login session with `agent-auth provider login <name>`; the command prints the `session_id`, `auth_url`, optional `user_code`, and expected user action, then exits immediately.
 - Open the printed URL in your browser and complete sign-in.
 - Finish authentication with `agent-auth session wait <id>` (for device-code or automatic local callbacks) or `agent-auth session submit <id> --input-stdin` (for providers that return a code or landing URL).
 
 # How it Really Works
 
-- `agent-auth session start` spawns a short-lived detached worker process for that single session and creates a private `0600` Unix domain socket and metadata file in a `0700` per-user runtime directory (`$AGENT_AUTH_RUNTIME_DIR`, `$XDG_RUNTIME_DIR/agent-auth` on Linux, or `/tmp/agent-auth-<uid>`). No permanent system daemon is installed.
+- `agent-auth provider login` spawns a short-lived detached worker process for that single session and creates a private `0600` Unix domain socket and metadata file in a `0700` per-user runtime directory (`$AGENT_AUTH_RUNTIME_DIR`, `$XDG_RUNTIME_DIR/agent-auth` on Linux, or `/tmp/agent-auth-<uid>`). No permanent system daemon is installed.
 - Credentials remain owned by each provider's native CLI and storage; `agent-auth` never writes authorization codes, callback URLs, or OAuth tokens to disk or logs.
 - For `codex`, `agent-auth` speaks JSON-RPC to `codex app-server --stdio` (`chatgptDeviceCode` by default, or `chatgpt` with `--method oauth`, strictly validating loopback `http://127.0.0.1:<port>/auth/callback` URLs before replaying them locally, and reading rate limits via `account/rateLimits/read`).
 - For `claude`, `agent-auth` runs `claude auth login` with a no-op `BROWSER` opener so no browser opens, captures the manual OAuth URL, and delivers the pasted code over stdin; `provider status` reads `claude auth status`, and `provider usage` queries `get_usage` (`skip_behaviors: true`) over Claude's `stream-json` control channel.
@@ -51,13 +51,13 @@ agent-auth provider status
 agent-auth provider usage
 
 # Start a non-blocking Codex device-code login
-agent-auth session start codex
+agent-auth provider login codex
 
 # After approving in your browser, wait for completion
 agent-auth session wait <id>
 
 # Start a Claude login and submit the code returned on the callback page
-agent-auth session start claude
+agent-auth provider login claude
 agent-auth session submit <id> --input '<code>#<state>'
 ```
 
@@ -67,7 +67,7 @@ Sample Output:
 [PENDING] Session a1b2c3d4e5f60718 (codex, device): awaiting_input
   Auth URL:  https://auth.openai.com/codex/device
   User Code: ABCD-EFGH
-  Next:      Open the URL, sign in, and enter the one-time code. Then call `agent-auth session wait <session-id>`.
+  Next:      Open the URL, sign in, and enter the one-time code. Then call `agent-auth session wait <id>`.
   Expires:   2026-11-21T15:15:00Z
 ```
 
@@ -98,15 +98,7 @@ Sample Output:
 | `--home <dir>` | | native home | Override the provider home directory |
 | `--timeout <sec>` | | `15` | Usage fetch timeout in seconds |
 
-`agent-auth provider logout <name>`
-
-| Flag | Short | Default | Description |
-| :--- | :--- | :--- | :--- |
-| `--provider-bin <path>` | | lookup on `PATH` | Override the provider CLI executable path |
-| `--home <dir>` | | native home | Override the provider home directory |
-| `--timeout <sec>` | | `15` | Logout timeout in seconds |
-
-`agent-auth session start <provider>`
+`agent-auth provider login <name>`
 
 | Flag | Short | Default | Description |
 | :--- | :--- | :--- | :--- |
@@ -118,6 +110,14 @@ Sample Output:
 | `--console` | | `false` | Use Anthropic Console API billing (`claude` only) |
 | `--sso` | | `false` | Use SSO sign-in (`claude` only) |
 | `--email <addr>` | | unset | Prefill email address on the login page (`claude` only) |
+
+`agent-auth provider logout <name>`
+
+| Flag | Short | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--provider-bin <path>` | | lookup on `PATH` | Override the provider CLI executable path |
+| `--home <dir>` | | native home | Override the provider home directory |
+| `--timeout <sec>` | | `15` | Logout timeout in seconds |
 
 `agent-auth session submit <id>`
 

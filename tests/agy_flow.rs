@@ -128,8 +128,8 @@ async fn agy_status_aborts_early_without_browser_and_acp_login_accepts_url_and_c
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "agy",
             "--provider-bin",
             bin.to_str().unwrap(),
@@ -201,8 +201,8 @@ async fn agy_status_aborts_early_without_browser_and_acp_login_accepts_url_and_c
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "agy",
             "--provider-bin",
             bin.to_str().unwrap(),
@@ -240,8 +240,8 @@ async fn agy_status_aborts_early_without_browser_and_acp_login_accepts_url_and_c
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "antigravity",
             "--provider-bin",
             bin.to_str().unwrap(),
@@ -333,8 +333,8 @@ async fn agy_status_aborts_early_without_browser_and_acp_login_accepts_url_and_c
     let err = cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "agy",
             "--provider-bin",
             bad_bin.to_str().unwrap(),

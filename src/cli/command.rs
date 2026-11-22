@@ -102,36 +102,11 @@ pub fn command(mode: Mode) -> Command {
                         ),
                 )
                 .subcommand(
-                    Command::new("logout")
-                        .about("Sign out of a provider using its native logout")
-                        .arg(
-                            Arg::new("provider")
-                                .value_name("name")
-                                .required(true)
-                                .help("Provider ID to sign out"),
-                        )
-                        .arg(provider_bin_arg())
-                        .arg(home_arg())
-                        .arg(
-                            Arg::new("timeout")
-                                .long("timeout")
-                                .value_name("sec")
-                                .default_value("15")
-                                .value_parser(clap::value_parser!(u64))
-                                .help("Logout timeout in seconds"),
-                        ),
-                ),
-        )
-        .subcommand(
-            Command::new("session")
-                .about("Manage non-blocking OAuth sign-in sessions")
-                .subcommand_required(true)
-                .subcommand(
-                    Command::new("start")
+                    Command::new("login")
                         .about("Start a non-blocking sign-in session and return the auth URL")
                         .arg(
                             Arg::new("provider")
-                                .value_name("provider")
+                                .value_name("name")
                                 .required(true)
                                 .help("Provider ID to sign in (codex, claude, or agy/antigravity)"),
                         )
@@ -180,6 +155,31 @@ pub fn command(mode: Mode) -> Command {
                                 .help("Prefill email address on the login page (claude only)"),
                         ),
                 )
+                .subcommand(
+                    Command::new("logout")
+                        .about("Sign out of a provider using its native logout")
+                        .arg(
+                            Arg::new("provider")
+                                .value_name("name")
+                                .required(true)
+                                .help("Provider ID to sign out"),
+                        )
+                        .arg(provider_bin_arg())
+                        .arg(home_arg())
+                        .arg(
+                            Arg::new("timeout")
+                                .long("timeout")
+                                .value_name("sec")
+                                .default_value("15")
+                                .value_parser(clap::value_parser!(u64))
+                                .help("Logout timeout in seconds"),
+                        ),
+                ),
+        )
+        .subcommand(
+            Command::new("session")
+                .about("Manage active OAuth sign-in sessions")
+                .subcommand_required(true)
                 .subcommand(
                     Command::new("submit")
                         .about("Submit user code or callback URL and wait for authentication")

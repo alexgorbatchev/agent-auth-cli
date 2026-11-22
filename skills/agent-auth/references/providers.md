@@ -1,6 +1,6 @@
 ---
 created_on: 2026-11-21 07:00
-last_modified: 2026-11-21 08:25
+last_modified: 2026-11-21 11:22
 status: current
 ---
 
@@ -22,7 +22,7 @@ status: current
 - **Status / usage / logout:** `claude auth status` (JSON), `provider usage` sends `get_usage` (`skip_behaviors: true`) over `claude -p --input-format stream-json --output-format stream-json --verbose --no-session-persistence --setting-sources ""`, and `claude auth logout`.
 
 ### `agy` (alias: `antigravity`)
-- **Aliases:** `antigravity` resolves to canonical provider `agy` on all commands (`provider status`, `provider usage`, `provider logout`, `session start`).
+- **Aliases:** `antigravity` resolves to canonical provider `agy` on all commands (`provider status`, `provider usage`, `provider login`, `provider logout`).
 - **Default method:** `oauth` (`agy acp --login`).
 - **Supported methods:** `oauth`.
 - **Browser policy:** `agy acp --login` is headless ACP terminal auth; `provider status` and `provider usage` run `agy -p /usage --output-format json` inside the browser-blocking sandbox and immediately terminate the child if unauthenticated prompts appear.

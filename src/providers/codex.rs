@@ -454,7 +454,7 @@ impl ProviderAdapter for CodexProvider {
                     expected_input: ExpectedInput {
                         kind: ExpectedInputKind::None,
                         required: false,
-                        prompt: "Open the URL, sign in, and enter the one-time code. Then call `agent-auth session wait <session-id>`.".into(),
+                        prompt: "Open the URL, sign in, and enter the one-time code. Then call `agent-auth session wait <id>`.".into(),
                     },
                     callback_origin: None,
                 }

@@ -1,6 +1,6 @@
 ---
 created_on: 2026-11-21 07:00
-last_modified: 2026-11-21 08:25
+last_modified: 2026-11-21 11:22
 status: current
 ---
 
@@ -11,9 +11,9 @@ status: current
 - `agent-auth provider list`: list supported providers (`codex`, `claude`, `agy` with alias `antigravity`), their default and supported methods, logout support, and whether each binary is on `PATH`.
 - `agent-auth provider status [name]`: inspect authentication status for one provider or all providers when `[name]` is omitted.
 - `agent-auth provider usage [name]`: fetch normalized usage and rate-limit quota buckets (`used_fraction`, `remaining_fraction`, `reset_time`) for one provider or all providers when `[name]` is omitted.
+- `agent-auth provider login <name>`: launch a detached per-session worker, wait for the provider auth URL (and optional user code), print the session snapshot, and exit immediately.
 - `agent-auth provider logout <name>`: sign out of `<name>` using its native logout command.
-- `agent-auth session`: session command group for non-blocking sign-in.
-- `agent-auth session start <provider>`: launch a detached per-session worker, wait for the provider auth URL (and optional user code), print the session snapshot, and exit immediately.
+- `agent-auth session`: session command group for managing active sign-in sessions.
 - `agent-auth session submit <id>`: submit user input (authorization code or callback URL) to the active session worker and wait for authentication to finish. When `expected_input.required` is `false` and no input is supplied, falls through to waiting.
 - `agent-auth session wait <id>`: wait up to `--timeout` seconds for an active session to complete without pasting input. Returns exit `3` with the current snapshot if still pending.
 - `agent-auth session status <id>`: inspect the current snapshot of an active session without blocking.
@@ -37,20 +37,20 @@ status: current
 
 | Flag | Type | Default | Commands | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `--provider-bin <path>` | path | unset; resolved from `PATH` | `provider status`, `provider usage`, `provider logout`, `session start` | Explicit provider executable path (requires naming `[name]` for `provider status` and `provider usage`) |
-| `--home <dir>` | path | unset; inherits native home | `provider status`, `provider usage`, `provider logout`, `session start` | Override provider home directory (`HOME`, XDG vars, and `CODEX_HOME`) |
+| `--provider-bin <path>` | path | unset; resolved from `PATH` | `provider status`, `provider usage`, `provider login`, `provider logout` | Explicit provider executable path (requires naming `[name]` for `provider status` and `provider usage`) |
+| `--home <dir>` | path | unset; inherits native home | `provider status`, `provider usage`, `provider login`, `provider logout` | Override provider home directory (`HOME`, XDG vars, and `CODEX_HOME`) |
 | `--timeout <sec>` | uint64 | 15 | `provider status`, `provider usage`, `provider logout` | Timeout in seconds for status, usage, or logout |
+| `--method <name>` | string | auto | `provider login` | Auth method (`auto`, `device`, or `oauth`); `auto` selects `device` when supported |
+| `--ttl <sec>` | uint64 | 900 | `provider login` | Maximum background session lifetime in seconds |
+| `--start-timeout <sec>` | uint64 | 20 | `provider login` | Startup timeout in seconds while waiting for the auth URL |
+| `--console` | bool | false | `provider login` | Use Anthropic Console API billing (`claude` only) |
+| `--sso` | bool | false | `provider login` | Use SSO sign-in (`claude` only) |
+| `--email <addr>` | string | unset | `provider login` | Prefill email address on the login page (`claude` only) |
 
 ## Session flags
 
 | Flag | Type | Default | Commands | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `--method <name>` | string | auto | `session start` | Auth method (`auto`, `device`, or `oauth`); `auto` selects `device` when supported |
-| `--ttl <sec>` | uint64 | 900 | `session start` | Maximum background session lifetime in seconds |
-| `--start-timeout <sec>` | uint64 | 20 | `session start` | Startup timeout in seconds while waiting for the auth URL |
-| `--console` | bool | false | `session start` | Use Anthropic Console API billing (`claude` only) |
-| `--sso` | bool | false | `session start` | Use SSO sign-in (`claude` only) |
-| `--email <addr>` | string | unset | `session start` | Prefill email address on the login page (`claude` only) |
 | `--input <text>` | string | unset | `session submit` | Authorization code or callback URL (conflicts with `--input-stdin`) |
 | `--input-stdin` | bool | false | `session submit` | Read authorization code or callback URL from stdin (conflicts with `--input`) |
 | `--timeout <sec>` | uint64 | 120 | `session submit` | Completion wait timeout in seconds |

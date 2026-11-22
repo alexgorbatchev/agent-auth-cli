@@ -117,8 +117,8 @@ async fn claude_oauth_suppresses_browser_submits_via_stdin_and_handles_invalid_c
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "claude",
             "--console",
             "--email",
@@ -278,8 +278,8 @@ async fn claude_oauth_suppresses_browser_submits_via_stdin_and_handles_invalid_c
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "claude",
             "--provider-bin",
             bin.to_str().unwrap(),
@@ -317,8 +317,8 @@ async fn claude_oauth_suppresses_browser_submits_via_stdin_and_handles_invalid_c
     cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "claude",
             "--sso",
             "--provider-bin",
@@ -365,8 +365,8 @@ async fn claude_oauth_suppresses_browser_submits_via_stdin_and_handles_invalid_c
     let err = cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "claude",
             "--provider-bin",
             bad_bin.to_str().unwrap(),

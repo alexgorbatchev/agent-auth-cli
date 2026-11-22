@@ -24,9 +24,9 @@ fn help_paths_include_agent_alert_and_human_tree_glyphs() {
             vec!["provider", "list"],
             vec!["provider", "status"],
             vec!["provider", "usage"],
+            vec!["provider", "login"],
             vec!["provider", "logout"],
             vec!["session"],
-            vec!["session", "start"],
             vec!["session", "submit"],
             vec!["session", "wait"],
             vec!["session", "status"],
@@ -114,7 +114,7 @@ async fn error_handling_and_argument_validation() {
 
     // Unsupported provider
     let err = cli::execute(
-        ["agent-auth", "session", "start", "nonexistent"],
+        ["agent-auth", "provider", "login", "nonexistent"],
         &env,
         &mut Vec::new(),
     )
@@ -127,8 +127,8 @@ async fn error_handling_and_argument_validation() {
     let err = cli::execute(
         [
             "agent-auth",
-            "session",
-            "start",
+            "provider",
+            "login",
             "claude",
             "--method",
             "device",
